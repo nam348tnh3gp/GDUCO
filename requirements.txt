@@ -1,0 +1,11 @@
+# Thư viện tính toán song song trên GPU (Yêu cầu đã cài Driver OpenCL)
+pyopencl>=2024.1
+
+# Thư viện xử lý mảng và toán học
+numpy>=1.20.0
+
+# Thư viện kết nối mạng để giao tiếp với Pool
+requests>=2.31.0
+
+# Thư viện làm đẹp giao diện dòng lệnh (màu sắc)
+colorama>=0.4.6
