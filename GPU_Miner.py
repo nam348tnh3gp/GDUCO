@@ -585,7 +585,8 @@ class GPUMiner:
         if power_percent < 100 and result_nonce[0] == 0:
             if solve_time > 0 and power_percent > 0:
                 sleep_time = solve_time * (100 - power_percent) / power_percent
-                sleep_time = min(sleep_time, 5.0)  # Cap to avoid connection timeout
+                # SỬA: cap tối đa 7 giây (thay vì 5 giây)
+                sleep_time = min(sleep_time, 7.0)  # <--- CHỈ SỬA DÒNG NÀY
                 if sleep_time > 0.001:
                     time.sleep(sleep_time)
         
