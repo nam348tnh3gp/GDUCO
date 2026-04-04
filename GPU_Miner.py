@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
 """
 Duino-Coin GPU Miner - TRUE Power Control 1-100%
-- Real GPU throttling (not fake delay loops)
-- Auto GPU Detection + Setup Guide
-- Auto Base64 encoding for mining key
-- Reads configuration from config.txt
-- Supports: Ubuntu, Debian, Fedora, Arch, Alpine, CentOS/RHEL
+Based on official PC_Miner.py structure
+Supports ALL Linux distributions (Ubuntu, Debian, Fedora, Arch, Alpine, CentOS/RHEL)
+AUTO INSTALLS everything including OpenCL runtime
 """
 
 import sys
@@ -15,7 +13,18 @@ import platform
 import threading
 import time
 
-# ==================== CHECK & INSTALL GUIDE ====================
+# ==================== AUTO INSTALL PACKAGES (like official miner) ====================
+def install_package(package):
+    """Automatically installs python pip package (same as official miner)"""
+    try:
+        import pip
+        pip.main(["install", package])
+    except (AttributeError, ImportError):
+        subprocess.check_call([sys.executable, '-m', 'pip', 'install', package])
+    
+    # Restart the program
+    os.execl(sys.executable, sys.executable, *sys.argv)
+
 def get_linux_distro():
     """Detect Linux distribution"""
     if not os.path.exists('/etc/os-release'):
@@ -37,58 +46,88 @@ def get_linux_distro():
     else:
         return "unknown"
 
-def install_package_linux(package_name):
-    """Install package using appropriate package manager"""
+def install_opencl_runtime_linux():
+    """Install OpenCL runtime for Linux (system level)"""
     distro = get_linux_distro()
     
-    # Map Python package names to system package names
-    pkg_map = {
-        "pyopencl": {
-            "alpine": "py3-opencl",
-            "debian": "python3-pyopencl",
-            "fedora": "python3-pyopencl",
-            "arch": "python-pyopencl",
-            "rhel": "python3-pyopencl"
-        },
-        "numpy": {
-            "alpine": "py3-numpy",
-            "debian": "python3-numpy",
-            "fedora": "python3-numpy",
-            "arch": "python-numpy",
-            "rhel": "python3-numpy"
-        },
-        "requests": {
-            "alpine": "py3-requests",
-            "debian": "python3-requests",
-            "fedora": "python3-requests",
-            "arch": "python-requests",
-            "rhel": "python3-requests"
-        },
-        "colorama": {
-            "alpine": "py3-colorama",
-            "debian": "python3-colorama",
-            "fedora": "python3-colorama",
-            "arch": "python-colorama",
-            "rhel": "python3-colorama"
-        }
-    }
+    print("\n📦 Installing OpenCL runtime for", distro)
     
     if distro == "alpine":
-        cmd = ["apk", "add", pkg_map[package_name][distro]]
+        cmds = [
+            ["apk", "add", "opencl-icd-loader", "clinfo"],
+            ["apk", "add", "intel-opencl-icd"],  # Intel GPU
+            ["apk", "add", "mesa-opencl-icd"]    # AMD GPU
+        ]
     elif distro == "debian":
-        cmd = ["apt", "install", "-y", pkg_map[package_name][distro]]
+        subprocess.run(["apt", "update"], capture_output=True)
+        cmds = [
+            ["apt", "install", "-y", "opencl-headers", "clinfo", "ocl-icd-libopencl1"],
+            ["apt", "install", "-y", "intel-opencl-icd"],
+            ["apt", "install", "-y", "mesa-opencl-icd"]
+        ]
     elif distro == "fedora":
-        cmd = ["dnf", "install", "-y", pkg_map[package_name][distro]]
+        cmds = [
+            ["dnf", "install", "-y", "opencl-headers", "clinfo", "ocl-icd"],
+            ["dnf", "install", "-y", "intel-opencl"],
+            ["dnf", "install", "-y", "mesa-libOpenCL"]
+        ]
     elif distro == "arch":
-        cmd = ["pacman", "-S", "--noconfirm", pkg_map[package_name][distro]]
+        cmds = [
+            ["pacman", "-S", "--noconfirm", "opencl-headers", "clinfo"],
+            ["pacman", "-S", "--noconfirm", "intel-compute-runtime"],
+            ["pacman", "-S", "--noconfirm", "opencl-mesa"]
+        ]
     elif distro == "rhel":
-        cmd = ["yum", "install", "-y", pkg_map[package_name][distro]]
+        cmds = [
+            ["yum", "install", "-y", "opencl-headers", "clinfo", "ocl-icd"],
+            ["yum", "install", "-y", "intel-opencl"],
+            ["yum", "install", "-y", "mesa-libOpenCL"]
+        ]
     else:
-        # Fallback to pip
-        cmd = [sys.executable, "-m", "pip", "install", package_name]
+        return False
     
+    for cmd in cmds:
+        try:
+            subprocess.run(cmd, capture_output=True, check=False)
+        except:
+            pass
+    
+    print("✅ OpenCL runtime installed")
+    return True
+
+def install_pyopencl_linux():
+    """Install pyopencl using system package manager on Linux"""
+    distro = get_linux_distro()
+    
+    if distro == "alpine":
+        # On Alpine, pyopencl is called py3-opencl
+        try:
+            subprocess.run(["apk", "add", "py3-opencl"], capture_output=True, check=True)
+            return True
+        except:
+            pass
+    elif distro == "debian":
+        try:
+            subprocess.run(["apt", "install", "-y", "python3-pyopencl"], capture_output=True, check=True)
+            return True
+        except:
+            pass
+    elif distro == "fedora":
+        try:
+            subprocess.run(["dnf", "install", "-y", "python3-pyopencl"], capture_output=True, check=True)
+            return True
+        except:
+            pass
+    elif distro == "arch":
+        try:
+            subprocess.run(["pacman", "-S", "--noconfirm", "python-pyopencl"], capture_output=True, check=True)
+            return True
+        except:
+            pass
+    
+    # Fallback to pip
     try:
-        subprocess.run(cmd, capture_output=True, check=True)
+        subprocess.run([sys.executable, "-m", "pip", "install", "pyopencl"], capture_output=True, check=True)
         return True
     except:
         return False
@@ -100,22 +139,55 @@ def try_import_opencl():
         return cl
     except ImportError:
         try:
-            import py3opencl as cl  # Alpine Linux
+            import py3opencl as cl
             return cl
         except ImportError:
             return None
 
-def check_and_install():
-    """Check dependencies and provide installation guide"""
+# ==================== CHECK DEPENDENCIES ====================
+def check_dependencies():
+    """Check and install all dependencies (similar to official miner)"""
     
-    # Try to import colorama first for colored output
+    print("\n" + "="*60)
+    print("🔍 Duino-Coin GPU Miner - Environment Check")
+    print("="*60)
+    
+    # Check Python version
+    if sys.version_info < (3, 6):
+        print("❌ Python 3.6 or higher required!")
+        sys.exit(1)
+    print(f"✅ Python {sys.version_info.major}.{sys.version_info.minor}")
+    
+    # Check platform
+    system = platform.system()
+    distro = None
+    if system == "Linux":
+        distro = get_linux_distro()
+        print(f"📦 Detected: {distro.capitalize()} Linux")
+        
+        # Check if running as root for Alpine
+        if distro == "alpine" and os.geteuid() != 0:
+            print("⚠️ On Alpine Linux, please run with: sudo python3 miner.py")
+            print("   (Required to install OpenCL runtime and py3-opencl)")
+            sys.exit(1)
+    
+    # Install required Python packages (like official miner)
+    required_packages = ["requests", "colorama", "numpy"]
+    
+    for package in required_packages:
+        try:
+            __import__(package)
+            print(f"✅ {package}")
+        except ImportError:
+            print(f"❌ {package} not found, installing...")
+            install_package(package)
+    
+    # Now import colorama properly
     try:
         from colorama import init, Fore, Back, Style
         init(autoreset=True)
-        use_color = True
     except:
-        # Fallback if colorama not installed yet
-        use_color = False
+        # Fallback
         class Fore:
             RED = CYAN = GREEN = YELLOW = WHITE = MAGENTA = BLUE = ''
         class Back:
@@ -123,211 +195,85 @@ def check_and_install():
         class Style:
             BRIGHT = DIM = NORMAL = RESET_ALL = ''
     
-    print("\n" + "="*60)
-    print("🔍 ENVIRONMENT CHECK")
-    print("="*60)
-    
-    # 1. Check Python version
-    py_version = sys.version_info
-    print(f"\n📌 Python version: {py_version.major}.{py_version.minor}.{py_version.micro}")
-    if py_version.major < 3 or (py_version.major == 3 and py_version.minor < 7):
-        print(f"{Fore.RED}❌ Python 3.7 or higher required!")
-        sys.exit(1)
-    print(f"{Fore.GREEN}✅ Python OK")
-    
-    # 2. Detect Linux distro
-    system = platform.system()
-    distro = None
+    # Install OpenCL runtime (Linux only)
     if system == "Linux":
-        distro = get_linux_distro()
-        print(f"{Fore.CYAN}📦 Detected: {distro.capitalize()} Linux")
-    
-    # 3. Check and install required packages
-    packages = ["pyopencl", "numpy", "requests", "colorama"]
-    missing = []
-    
-    for pkg in packages:
-        if pkg == "pyopencl":
-            if try_import_opencl() is not None:
-                print(f"{Fore.GREEN}✅ {pkg} OK")
+        print("\n🔧 Checking OpenCL runtime...")
+        try:
+            result = subprocess.run(["clinfo"], capture_output=True)
+            if result.returncode != 0:
+                print("⚠️ OpenCL runtime not found, installing...")
+                if install_opencl_runtime_linux():
+                    print("✅ OpenCL runtime installed")
+                    print("⚠️ Please restart the miner!")
+                    sys.exit(0)
+                else:
+                    print("❌ Failed to install OpenCL runtime")
+                    print("   Please install manually:")
+                    if distro == "alpine":
+                        print("   apk add opencl-icd-loader clinfo intel-opencl-icd")
+                    sys.exit(1)
             else:
-                missing.append(pkg)
-                print(f"{Fore.RED}❌ {pkg} MISSING")
+                print("✅ OpenCL runtime OK")
+        except FileNotFoundError:
+            print("⚠️ clinfo not found, installing OpenCL runtime...")
+            if install_opencl_runtime_linux():
+                print("✅ OpenCL runtime installed")
+                print("⚠️ Please restart the miner!")
+                sys.exit(0)
+    
+    # Install pyopencl
+    print("\n📦 Checking pyopencl...")
+    if try_import_opencl() is not None:
+        print("✅ pyopencl OK")
+    else:
+        print("❌ pyopencl not found, installing...")
+        if system == "Linux":
+            if install_pyopencl_linux():
+                print("✅ pyopencl installed")
+                print("⚠️ Please restart the miner!")
+                sys.exit(0)
+            else:
+                print("❌ Failed to install pyopencl")
+                sys.exit(1)
         else:
-            try:
-                __import__(pkg)
-                print(f"{Fore.GREEN}✅ {pkg} OK")
-            except ImportError:
-                missing.append(pkg)
-                print(f"{Fore.RED}❌ {pkg} MISSING")
+            # Windows/macOS - use pip
+            install_package("pyopencl")
     
-    if missing:
-        print(f"\n{Fore.YELLOW}📦 Installing missing packages...")
-        
-        for pkg in missing:
-            print(f"   Installing {pkg}...")
-            if system == "Linux" and distro:
-                success = install_package_linux(pkg)
-                if not success:
-                    # Fallback to pip
-                    subprocess.run([sys.executable, "-m", "pip", "install", pkg], capture_output=True)
-            else:
-                # Non-Linux: use pip
-                subprocess.run([sys.executable, "-m", "pip", "install", pkg], capture_output=True)
-        
-        print(f"{Fore.GREEN}✅ Installation complete! Please restart the program.")
-        sys.exit(0)
-    
-    # Now import colorama properly
-    try:
-        from colorama import init, Fore, Back, Style
-        init(autoreset=True)
-    except:
-        pass
-    
-    # 4. Check OpenCL driver
-    print(f"\n🔍 Checking OpenCL driver...")
-    
+    # Final check
     cl = try_import_opencl()
     if cl is None:
-        print(f"{Fore.RED}❌ OpenCL module not available!")
+        print("❌ Cannot import OpenCL after installation!")
         sys.exit(1)
     
+    # Test OpenCL
+    print("\n🔍 Testing OpenCL...")
     try:
         platforms = cl.get_platforms()
-        
         if not platforms:
             raise Exception("No platforms")
+        print(f"✅ OpenCL OK - {len(platforms)} platform(s)")
         
-        print(f"{Fore.GREEN}✅ OpenCL driver OK - Found {len(platforms)} platform(s)")
-        
-        # List GPUs
         gpu_found = False
-        for i, p in enumerate(platforms):
+        for p in platforms:
             devices = p.get_devices(device_type=cl.device_type.GPU)
             if devices:
-                for j, d in enumerate(devices):
-                    print(f"{Fore.CYAN}   🖥️ GPU {j}: {d.name} (Platform {i}: {p.name})")
+                for d in devices:
+                    print(f"   🖥️ GPU: {d.name}")
                     gpu_found = True
         
         if not gpu_found:
-            print(f"{Fore.YELLOW}⚠️ No GPU found!")
-            print(f"{Fore.YELLOW}   Will run on CPU (very slow)")
-            
+            print("⚠️ No GPU found, will run on CPU (slow)")
     except Exception as e:
-        print(f"{Fore.RED}❌ OpenCL driver NOT INSTALLED!")
-        print(f"\n{Fore.YELLOW}📖 OPENCL DRIVER INSTALLATION GUIDE:")
-        print(f"{Fore.CYAN}{'='*50}")
-        
-        if system == "Windows":
-            print(f"""
-{Fore.WHITE}🔹 WINDOWS:
-   1. NVIDIA GPU: Download driver from https://www.nvidia.com/Download/index.aspx
-   2. AMD GPU: Download driver from https://www.amd.com/en/support
-   3. Intel GPU: Download from https://www.intel.com/content/www/us/en/download/19308/intel-graphics-windows-dch-drivers.html
-   
-   After installing driver, RESTART your computer and run again.
-""")
-        elif system == "Linux":
-            if distro == "alpine":
-                print(f"""
-{Fore.WHITE}🔹 ALPINE LINUX:
-   
-   # Install OpenCL ICD loader
-   sudo apk add opencl-icd-loader clinfo
-   
-   # For Intel GPU:
-   sudo apk add intel-opencl-icd
-   
-   # For AMD GPU:
-   sudo apk add mesa-opencl-icd
-   
-   # Verify installation:
-   clinfo
-""")
-            elif distro == "debian":
-                print(f"""
-{Fore.WHITE}🔹 UBUNTU/DEBIAN:
-   
-   sudo apt update
-   sudo apt install opencl-headers clinfo
-   
-   # NVIDIA GPU:
-   sudo apt install nvidia-opencl-icd
-   
-   # AMD GPU:
-   sudo apt install mesa-opencl-icd
-   
-   # Intel GPU:
-   sudo apt install intel-opencl-icd
-   
-   # Verify installation:
-   clinfo
-""")
-            elif distro == "fedora":
-                print(f"""
-{Fore.WHITE}🔹 FEDORA:
-   
-   sudo dnf install opencl-headers clinfo
-   
-   # NVIDIA GPU:
-   sudo dnf install nvidia-opencl
-   
-   # AMD/Intel GPU:
-   sudo dnf install mesa-libOpenCL
-   
-   # Verify installation:
-   clinfo
-""")
-            elif distro == "arch":
-                print(f"""
-{Fore.WHITE}🔹 ARCH LINUX:
-   
-   sudo pacman -S opencl-headers clinfo
-   
-   # NVIDIA GPU:
-   sudo pacman -S opencl-nvidia
-   
-   # AMD GPU:
-   sudo pacman -S opencl-mesa
-   
-   # Intel GPU:
-   sudo pacman -S intel-compute-runtime
-   
-   # Verify installation:
-   clinfo
-""")
-            else:
-                print(f"""
-{Fore.WHITE}🔹 LINUX (General):
-   
-   # Install OpenCL development packages:
-   sudo apt install opencl-headers clinfo  # Debian/Ubuntu
-   # OR
-   sudo dnf install opencl-headers clinfo  # Fedora
-   # OR
-   sudo pacman -S opencl-headers clinfo    # Arch
-   
-   # Then install GPU-specific driver
-""")
-        elif system == "Darwin":  # macOS
-            print(f"""
-{Fore.WHITE}🔹 macOS:
-   macOS has OpenCL framework built-in.
-   If you see errors, update to latest macOS version.
-""")
-        
-        print(f"{Fore.CYAN}{'='*50}")
-        print(f"{Fore.YELLOW}⚠️ After driver installation, RESTART and run again!")
+        print(f"❌ OpenCL error: {e}")
         sys.exit(1)
     
-    print(f"\n{Fore.GREEN}✅ Environment OK! Starting miner...\n")
+    print("\n✅ All dependencies OK!\n")
     return cl
 
-# Run check before importing other modules
-cl = check_and_install()
+# Run dependency check
+cl = check_dependencies()
 
-# Import all modules (after checks)
+# Import modules (after checks)
 import numpy as np
 import requests
 import socket
@@ -335,19 +281,9 @@ import base64
 import random
 import json
 from datetime import datetime
+from colorama import init, Fore, Back, Style
 
-# Import colorama (now installed)
-try:
-    from colorama import init, Fore, Back, Style
-    init(autoreset=True)
-except:
-    # Fallback if still not available
-    class Fore:
-        RED = CYAN = GREEN = YELLOW = WHITE = MAGENTA = BLUE = ''
-    class Back:
-        RED = CYAN = GREEN = YELLOW = WHITE = MAGENTA = BLUE = ''
-    class Style:
-        BRIGHT = DIM = NORMAL = RESET_ALL = ''
+init(autoreset=True)
 
 # ==================== HELPER FUNCTIONS ====================
 def encode_mining_key(key):
@@ -450,14 +386,9 @@ def load_config():
 # ============================================
 
 # DUINO-COIN ACCOUNT (REQUIRED)
-# Register at: https://duinocoin.com/register
 USERNAME = your_username
 
-# MINING KEY (IMPORTANT!)
-# You can enter either:
-#   - Plain text key -> will be auto-encoded to Base64
-#   - Already encoded Base64 key
-#   - "None" if you don't have a key
+# MINING KEY (leave as None if you don't have one)
 MINING_KEY = None
 
 # DIFFICULTY: LOW, MEDIUM, HIGH, NET
@@ -545,7 +476,7 @@ REPORT_INTERVAL = 300
     
     return config
 
-# ==================== OPENCL KERNEL (giữ nguyên) ====================
+# ==================== OPENCL KERNEL ====================
 OPENCL_KERNEL = """
 // SHA1 implementation for OpenCL
 #define LEFT_ROTATE(x, n) (((x) << (n)) | ((x) >> (32 - (n))))
@@ -664,8 +595,6 @@ class GPUMiner:
             'blocks': 0,
             'total_hashrate': 0
         }
-        self.last_job_time = 0
-        self.total_solve_time = 0
         
     def init_gpu(self):
         platforms = cl.get_platforms()
