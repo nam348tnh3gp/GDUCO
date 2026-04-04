@@ -5,6 +5,7 @@ Duino-Coin GPU Miner - TRUE Power Control 1-100%
 - Auto GPU Detection + Setup Guide
 - Auto Base64 encoding for mining key
 - Reads configuration from config.txt
+- Supports: Ubuntu, Debian, Fedora, Arch, Alpine, CentOS/RHEL
 """
 
 import sys
@@ -15,6 +16,95 @@ import threading
 import time
 
 # ==================== CHECK & INSTALL GUIDE ====================
+def get_linux_distro():
+    """Detect Linux distribution"""
+    if not os.path.exists('/etc/os-release'):
+        return "unknown"
+    
+    with open('/etc/os-release', 'r') as f:
+        content = f.read().lower()
+    
+    if 'alpine' in content:
+        return "alpine"
+    elif 'ubuntu' in content or 'debian' in content:
+        return "debian"
+    elif 'fedora' in content:
+        return "fedora"
+    elif 'arch' in content:
+        return "arch"
+    elif 'centos' in content or 'rhel' in content:
+        return "rhel"
+    else:
+        return "unknown"
+
+def install_package_linux(package_name):
+    """Install package using appropriate package manager"""
+    distro = get_linux_distro()
+    
+    # Map Python package names to system package names
+    pkg_map = {
+        "pyopencl": {
+            "alpine": "py3-opencl",
+            "debian": "python3-pyopencl",
+            "fedora": "python3-pyopencl",
+            "arch": "python-pyopencl",
+            "rhel": "python3-pyopencl"
+        },
+        "numpy": {
+            "alpine": "py3-numpy",
+            "debian": "python3-numpy",
+            "fedora": "python3-numpy",
+            "arch": "python-numpy",
+            "rhel": "python3-numpy"
+        },
+        "requests": {
+            "alpine": "py3-requests",
+            "debian": "python3-requests",
+            "fedora": "python3-requests",
+            "arch": "python-requests",
+            "rhel": "python3-requests"
+        },
+        "colorama": {
+            "alpine": "py3-colorama",
+            "debian": "python3-colorama",
+            "fedora": "python3-colorama",
+            "arch": "python-colorama",
+            "rhel": "python3-colorama"
+        }
+    }
+    
+    if distro == "alpine":
+        cmd = ["apk", "add", pkg_map[package_name][distro]]
+    elif distro == "debian":
+        cmd = ["apt", "install", "-y", pkg_map[package_name][distro]]
+    elif distro == "fedora":
+        cmd = ["dnf", "install", "-y", pkg_map[package_name][distro]]
+    elif distro == "arch":
+        cmd = ["pacman", "-S", "--noconfirm", pkg_map[package_name][distro]]
+    elif distro == "rhel":
+        cmd = ["yum", "install", "-y", pkg_map[package_name][distro]]
+    else:
+        # Fallback to pip
+        cmd = [sys.executable, "-m", "pip", "install", package_name]
+    
+    try:
+        subprocess.run(cmd, capture_output=True, check=True)
+        return True
+    except:
+        return False
+
+def try_import_opencl():
+    """Try to import OpenCL with different possible names"""
+    try:
+        import pyopencl as cl
+        return cl
+    except ImportError:
+        try:
+            import py3opencl as cl  # Alpine Linux
+            return cl
+        except ImportError:
+            return None
+
 def check_and_install():
     """Check dependencies and provide installation guide"""
     
@@ -42,56 +132,68 @@ def check_and_install():
     print(f"\n📌 Python version: {py_version.major}.{py_version.minor}.{py_version.micro}")
     if py_version.major < 3 or (py_version.major == 3 and py_version.minor < 7):
         print(f"{Fore.RED}❌ Python 3.7 or higher required!")
-        print(f"{Fore.YELLOW}📥 Download Python: https://python.org/downloads/")
         sys.exit(1)
     print(f"{Fore.GREEN}✅ Python OK")
     
-    # 2. Check pip
-    try:
-        subprocess.run([sys.executable, "-m", "pip", "--version"], 
-                      capture_output=True, check=True)
-        print(f"{Fore.GREEN}✅ pip OK")
-    except:
-        print(f"{Fore.RED}❌ pip not available!")
-        sys.exit(1)
+    # 2. Detect Linux distro
+    system = platform.system()
+    distro = None
+    if system == "Linux":
+        distro = get_linux_distro()
+        print(f"{Fore.CYAN}📦 Detected: {distro.capitalize()} Linux")
     
     # 3. Check and install required packages
-    packages = {
-        "pyopencl": "pyopencl",
-        "numpy": "numpy", 
-        "requests": "requests",
-        "colorama": "colorama"
-    }
-    
+    packages = ["pyopencl", "numpy", "requests", "colorama"]
     missing = []
-    for pkg, import_name in packages.items():
-        try:
-            __import__(import_name)
-            print(f"{Fore.GREEN}✅ {pkg} OK")
-        except ImportError:
-            missing.append(pkg)
-            print(f"{Fore.RED}❌ {pkg} MISSING")
+    
+    for pkg in packages:
+        if pkg == "pyopencl":
+            if try_import_opencl() is not None:
+                print(f"{Fore.GREEN}✅ {pkg} OK")
+            else:
+                missing.append(pkg)
+                print(f"{Fore.RED}❌ {pkg} MISSING")
+        else:
+            try:
+                __import__(pkg)
+                print(f"{Fore.GREEN}✅ {pkg} OK")
+            except ImportError:
+                missing.append(pkg)
+                print(f"{Fore.RED}❌ {pkg} MISSING")
     
     if missing:
         print(f"\n{Fore.YELLOW}📦 Installing missing packages...")
+        
         for pkg in missing:
             print(f"   Installing {pkg}...")
-            subprocess.run([sys.executable, "-m", "pip", "install", pkg], 
-                          capture_output=True)
+            if system == "Linux" and distro:
+                success = install_package_linux(pkg)
+                if not success:
+                    # Fallback to pip
+                    subprocess.run([sys.executable, "-m", "pip", "install", pkg], capture_output=True)
+            else:
+                # Non-Linux: use pip
+                subprocess.run([sys.executable, "-m", "pip", "install", pkg], capture_output=True)
+        
         print(f"{Fore.GREEN}✅ Installation complete! Please restart the program.")
         sys.exit(0)
     
     # Now import colorama properly
-    from colorama import init, Fore, Back, Style
-    init(autoreset=True)
+    try:
+        from colorama import init, Fore, Back, Style
+        init(autoreset=True)
+    except:
+        pass
     
     # 4. Check OpenCL driver
     print(f"\n🔍 Checking OpenCL driver...")
     
-    system = platform.system()
+    cl = try_import_opencl()
+    if cl is None:
+        print(f"{Fore.RED}❌ OpenCL module not available!")
+        sys.exit(1)
     
     try:
-        import pyopencl as cl
         platforms = cl.get_platforms()
         
         if not platforms:
@@ -127,10 +229,26 @@ def check_and_install():
    After installing driver, RESTART your computer and run again.
 """)
         elif system == "Linux":
-            print(f"""
-{Fore.WHITE}🔹 LINUX:
+            if distro == "alpine":
+                print(f"""
+{Fore.WHITE}🔹 ALPINE LINUX:
    
-   # Ubuntu/Debian:
+   # Install OpenCL ICD loader
+   sudo apk add opencl-icd-loader clinfo
+   
+   # For Intel GPU:
+   sudo apk add intel-opencl-icd
+   
+   # For AMD GPU:
+   sudo apk add mesa-opencl-icd
+   
+   # Verify installation:
+   clinfo
+""")
+            elif distro == "debian":
+                print(f"""
+{Fore.WHITE}🔹 UBUNTU/DEBIAN:
+   
    sudo apt update
    sudo apt install opencl-headers clinfo
    
@@ -146,6 +264,52 @@ def check_and_install():
    # Verify installation:
    clinfo
 """)
+            elif distro == "fedora":
+                print(f"""
+{Fore.WHITE}🔹 FEDORA:
+   
+   sudo dnf install opencl-headers clinfo
+   
+   # NVIDIA GPU:
+   sudo dnf install nvidia-opencl
+   
+   # AMD/Intel GPU:
+   sudo dnf install mesa-libOpenCL
+   
+   # Verify installation:
+   clinfo
+""")
+            elif distro == "arch":
+                print(f"""
+{Fore.WHITE}🔹 ARCH LINUX:
+   
+   sudo pacman -S opencl-headers clinfo
+   
+   # NVIDIA GPU:
+   sudo pacman -S opencl-nvidia
+   
+   # AMD GPU:
+   sudo pacman -S opencl-mesa
+   
+   # Intel GPU:
+   sudo pacman -S intel-compute-runtime
+   
+   # Verify installation:
+   clinfo
+""")
+            else:
+                print(f"""
+{Fore.WHITE}🔹 LINUX (General):
+   
+   # Install OpenCL development packages:
+   sudo apt install opencl-headers clinfo  # Debian/Ubuntu
+   # OR
+   sudo dnf install opencl-headers clinfo  # Fedora
+   # OR
+   sudo pacman -S opencl-headers clinfo    # Arch
+   
+   # Then install GPU-specific driver
+""")
         elif system == "Darwin":  # macOS
             print(f"""
 {Fore.WHITE}🔹 macOS:
@@ -158,13 +322,12 @@ def check_and_install():
         sys.exit(1)
     
     print(f"\n{Fore.GREEN}✅ Environment OK! Starting miner...\n")
-    return True
+    return cl
 
 # Run check before importing other modules
-check_and_install()
+cl = check_and_install()
 
 # Import all modules (after checks)
-import pyopencl as cl
 import numpy as np
 import requests
 import socket
@@ -172,33 +335,36 @@ import base64
 import random
 import json
 from datetime import datetime
-from colorama import init, Fore, Back, Style
 
-init(autoreset=True)
+# Import colorama (now installed)
+try:
+    from colorama import init, Fore, Back, Style
+    init(autoreset=True)
+except:
+    # Fallback if still not available
+    class Fore:
+        RED = CYAN = GREEN = YELLOW = WHITE = MAGENTA = BLUE = ''
+    class Back:
+        RED = CYAN = GREEN = YELLOW = WHITE = MAGENTA = BLUE = ''
+    class Style:
+        BRIGHT = DIM = NORMAL = RESET_ALL = ''
 
 # ==================== HELPER FUNCTIONS ====================
 def encode_mining_key(key):
-    """
-    Encode mining key to Base64 if it's plain text.
-    Duino-Coin server expects Base64 encoded keys.
-    """
+    """Encode mining key to Base64 if it's plain text."""
     if not key or key == "None" or key == "none" or key == "":
         return "None"
     
-    # Check if already looks like Base64 (contains only valid chars and length multiple of 4)
     import re
     is_base64 = re.match(r'^[A-Za-z0-9+/]+=*$', key) and len(key) % 4 == 0
     
     if is_base64 and len(key) > 8:
-        # Try to decode to see if it's valid Base64
         try:
-            decoded = base64.b64decode(key)
-            # If decode succeeds, it's already Base64
+            base64.b64decode(key)
             return key
         except:
             pass
     
-    # Plain text - encode to Base64
     try:
         encoded = base64.b64encode(key.encode('utf-8')).decode('utf-8')
         print(f"{Fore.GREEN}✅ Mining key encoded to Base64")
@@ -208,9 +374,7 @@ def encode_mining_key(key):
         return "None"
 
 def decode_mining_key(encoded_key):
-    """
-    Decode Base64 mining key back to plain text for display.
-    """
+    """Decode Base64 mining key back to plain text for display."""
     if not encoded_key or encoded_key == "None":
         return "None"
     
@@ -278,7 +442,7 @@ def load_config():
             for i, gpu in enumerate(gpus):
                 print(f"   GPU_PLATFORM = {gpu['platform_idx']}, GPU_DEVICE = {gpu['device_idx']} → {gpu['device_name']}")
     else:
-        print(f"{Fore.YELLOW}⚠️ No GPU found, will use CPU (if OpenCL available)")
+        print(f"{Fore.YELLOW}⚠️ No GPU found, will run on CPU")
     
     # Create sample config if not exists
     if not os.path.exists(config_file):
@@ -291,14 +455,12 @@ USERNAME = your_username
 
 # MINING KEY (IMPORTANT!)
 # You can enter either:
-#   - Plain text key (e.g., "mySecretKey123") -> will be auto-encoded to Base64
+#   - Plain text key -> will be auto-encoded to Base64
 #   - Already encoded Base64 key
 #   - "None" if you don't have a key
-# Get your key at: https://duinocoin.com/dashboard
 MINING_KEY = None
 
-# DIFFICULTY: LOW (easiest), MEDIUM, NET (hardest)
-# LOW: difficulty ~5-20, good for slow mining
+# DIFFICULTY: LOW, MEDIUM, HIGH, NET
 DIFFICULTY = LOW
 
 # RIG ID (your miner identifier)
@@ -320,12 +482,10 @@ RIG_ID = GPU_Miner
         
         sample_config += f"""
 # TRUE GPU POWER (1-100%)
-# 1% = GPU only works 1% of the time, sleeps 99% -> COOL & EFFICIENT
-# Lower = cooler GPU, lower difficulty, higher accept rate
-# Recommended: 1-10% for 24/7 mining without overheating
+# 1% = GPU works 1% of time, sleeps 99%
 GPU_LOAD_PERCENT = 5
 
-# NETWORK SETTINGS (No need to change)
+# NETWORK SETTINGS
 POOL_URL = https://server.duinocoin.com/getPool
 SOC_TIMEOUT = 10
 REPORT_INTERVAL = 300
@@ -335,9 +495,8 @@ REPORT_INTERVAL = 300
         
         print(f"\n{Fore.YELLOW}📝 Created sample config file: {config_file}")
         print(f"{Fore.YELLOW}   ⚠️ PLEASE EDIT YOUR USERNAME BEFORE RUNNING!")
-        print(f"{Fore.CYAN}   🔹 Open {config_file} with notepad")
+        print(f"{Fore.CYAN}   🔹 Open {config_file}")
         print(f"{Fore.CYAN}   🔹 Change USERNAME = your_actual_username")
-        print(f"{Fore.CYAN}   🔹 Change MINING_KEY = your_key (plain text or Base64)")
         print(f"{Fore.CYAN}   🔹 Save and run again")
         sys.exit(0)
     
@@ -356,7 +515,6 @@ REPORT_INTERVAL = 300
                 if key == "USERNAME":
                     config["USERNAME"] = value
                 elif key == "MINING_KEY":
-                    # Auto-encode to Base64 if plain text
                     if value and value != "None":
                         config["MINING_KEY"] = encode_mining_key(value)
                     else:
@@ -387,7 +545,7 @@ REPORT_INTERVAL = 300
     
     return config
 
-# ==================== OPENCL KERNEL (NO FAKE DELAYS) ====================
+# ==================== OPENCL KERNEL (giữ nguyên) ====================
 OPENCL_KERNEL = """
 // SHA1 implementation for OpenCL
 #define LEFT_ROTATE(x, n) (((x) << (n)) | ((x) >> (32 - (n))))
@@ -580,13 +738,12 @@ class GPUMiner:
         
         solve_time = time.time() - solve_start
         
-        # TRUE POWER THROTTLING - Sleep in Python, not in GPU kernel
+        # TRUE POWER THROTTLING
         power_percent = self.config["GPU_LOAD_PERCENT"]
         if power_percent < 100 and result_nonce[0] == 0:
             if solve_time > 0 and power_percent > 0:
                 sleep_time = solve_time * (100 - power_percent) / power_percent
-                # SỬA: cap tối đa 7 giây (thay vì 5 giây)
-                sleep_time = min(sleep_time, 7.0)  # <--- CHỈ SỬA DÒNG NÀY
+                sleep_time = min(sleep_time, 7.0)
                 if sleep_time > 0.001:
                     time.sleep(sleep_time)
         
@@ -620,8 +777,6 @@ class DuinoClient:
         return version, name
     
     def send_job_request(self, username, difficulty, mining_key):
-        """Send job request with properly encoded mining key"""
-        # mining_key is already Base64 encoded from config
         key = mining_key if mining_key != "None" else "None"
         msg = f"JOB,{username},{difficulty},{key}\n"
         self.socket.send(msg.encode())
@@ -653,10 +808,8 @@ def main():
     print(f"{Fore.YELLOW}🪙 Duino-Coin GPU Miner - TRUE Power Control 1-100%")
     print(f"{Fore.CYAN}{'='*60}")
     
-    # Load configuration (auto-encodes mining key)
     config = load_config()
     
-    # Show config with masked key for security
     display_key = decode_mining_key(config["MINING_KEY"])
     if display_key != "None" and len(display_key) > 8:
         display_key = display_key[:4] + "..." + display_key[-4:]
@@ -667,9 +820,7 @@ def main():
     print(f"{Fore.CYAN}   🎯 Difficulty: {config['DIFFICULTY']}")
     print(f"{Fore.CYAN}   🖥️ Rig ID: {config['RIG_ID']}")
     print(f"{Fore.CYAN}   ⚡ GPU Power: {config['GPU_LOAD_PERCENT']}%")
-    print(f"{Fore.CYAN}   💡 True throttling: GPU works {config['GPU_LOAD_PERCENT']}% of time")
     
-    # Initialize GPU
     miner = GPUMiner(config)
     try:
         miner.init_gpu()
@@ -685,7 +836,6 @@ def main():
     
     print(f"\n{Fore.GREEN}✅ START MINING!")
     print(f"{Fore.YELLOW}   ⚡ GPU will be used only {config['GPU_LOAD_PERCENT']}% of the time")
-    print(f"{Fore.YELLOW}   🎯 Difficulty: {config['DIFFICULTY']} (low difficulty = easy shares)")
     print(f"{Fore.CYAN}   📊 Dashboard: https://duinocoin.com/dashboard\n")
     
     while True:
@@ -725,7 +875,6 @@ def main():
                         reason = feedback.split(',')[1] if ',' in feedback else "unknown"
                         print(f"{Fore.RED}❌ REJECT | {reason}")
                 
-                # Periodic report
                 if time.time() - last_report >= config["REPORT_INTERVAL"]:
                     uptime = int(time.time() - start_time)
                     total = stats['accepted'] + stats['rejected']
@@ -739,7 +888,6 @@ def main():
                     print(f"{Fore.CYAN}   📈 Accept Rate: {rate:.1f}%")
                     print(f"{Fore.CYAN}   🚀 Hashrate: {format_hashrate(stats['total_hashrate'])}")
                     print(f"{Fore.CYAN}   ⚡ Target Power: {config['GPU_LOAD_PERCENT']}%")
-                    print(f"{Fore.CYAN}   🌡️ GPU stays COOL - true power throttling")
                     print(f"{Fore.CYAN}   ⏱️ Uptime: {uptime//3600}h {(uptime%3600)//60}m")
                     print(f"{Fore.CYAN}{'='*50}\n")
                     
