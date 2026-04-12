@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Duino-Coin GPU Miner - TRUE Power Control 1-100%
+Duino-Coin GPU Miner
 Based on official PC_Miner.py structure
 Supports ALL Linux distributions (Ubuntu, Debian, Fedora, Arch, Alpine, CentOS/RHEL)
 AUTO INSTALLS everything including OpenCL runtime
@@ -589,6 +589,7 @@ class GPUMiner:
         self.context = None
         self.queue = None
         self.program = None
+        self.kernel = None  # Store kernel reference to avoid RepeatedKernelRetrieval
         self.stats = {
             'accepted': 0,
             'rejected': 0,
@@ -633,6 +634,8 @@ class GPUMiner:
         
         print(f"{Fore.YELLOW}⏳ Compiling OpenCL kernel...")
         self.program = cl.Program(self.context, OPENCL_KERNEL).build()
+        # CREATE KERNEL ONCE AND REUSE IT (FIX FOR RepeatedKernelRetrieval)
+        self.kernel = cl.Kernel(self.program, "ducos1_gpu")
         print(f"{Fore.GREEN}✅ Kernel ready!")
         
     def solve_job(self, last_hash_hex, target_hex, difficulty):
@@ -651,15 +654,17 @@ class GPUMiner:
         
         solve_start = time.time()
         
-        kernel = self.program.ducos1_gpu
-        kernel.set_args(last_hash_buf, target_buf, np.uint32(difficulty), 
-                       np.uint32(work_size),
-                       result_nonce_buf)
+        # REUSE EXISTING KERNEL INSTEAD OF CREATING NEW ONE
+        self.kernel.set_arg(0, last_hash_buf)
+        self.kernel.set_arg(1, target_buf)
+        self.kernel.set_arg(2, np.uint32(difficulty))
+        self.kernel.set_arg(3, np.uint32(work_size))
+        self.kernel.set_arg(4, result_nonce_buf)
         
         local_size = min(64, work_size)
         global_size = ((work_size + local_size - 1) // local_size) * local_size
         
-        event = cl.enqueue_nd_range_kernel(self.queue, kernel, (global_size,), (local_size,))
+        event = cl.enqueue_nd_range_kernel(self.queue, self.kernel, (global_size,), (local_size,))
         event.wait()
         
         result_nonce = np.zeros(1, dtype=np.uint32)
