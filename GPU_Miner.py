@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Duino-Coin GPU Miner
-Based on official PC_Miner.py structure
+Enhanced version with improved error handling, resource management, and performance
 Supports ALL Linux distributions (Ubuntu, Debian, Fedora, Arch, Alpine, CentOS/RHEL)
 AUTO INSTALLS everything including OpenCL runtime
 """
@@ -12,10 +12,17 @@ import subprocess
 import platform
 import threading
 import time
+import re
+import socket
+import base64
+import random
+import json
+from datetime import datetime
+from typing import Dict, List, Optional, Tuple, Any
 
-# ==================== AUTO INSTALL PACKAGES (like official miner) ====================
-def install_package(package):
-    """Automatically installs python pip package (same as official miner)"""
+# ==================== AUTO INSTALL PACKAGES ====================
+def install_package(package: str) -> None:
+    """Automatically installs python pip package"""
     try:
         import pip
         pip.main(["install", package])
@@ -25,7 +32,7 @@ def install_package(package):
     # Restart the program
     os.execl(sys.executable, sys.executable, *sys.argv)
 
-def get_linux_distro():
+def get_linux_distro() -> str:
     """Detect Linux distribution"""
     if not os.path.exists('/etc/os-release'):
         return "unknown"
@@ -43,93 +50,80 @@ def get_linux_distro():
         return "arch"
     elif 'centos' in content or 'rhel' in content:
         return "rhel"
-    else:
-        return "unknown"
+    return "unknown"
 
-def install_opencl_runtime_linux():
+def install_opencl_runtime_linux() -> bool:
     """Install OpenCL runtime for Linux (system level)"""
     distro = get_linux_distro()
     
-    print("\n📦 Installing OpenCL runtime for", distro)
+    print(f"\n📦 Installing OpenCL runtime for {distro}")
     
-    if distro == "alpine":
-        cmds = [
+    commands_map = {
+        "alpine": [
             ["apk", "add", "opencl-icd-loader", "clinfo"],
-            ["apk", "add", "intel-opencl-icd"],  # Intel GPU
-            ["apk", "add", "mesa-opencl-icd"]    # AMD GPU
-        ]
-    elif distro == "debian":
-        subprocess.run(["apt", "update"], capture_output=True)
-        cmds = [
+            ["apk", "add", "intel-opencl-icd"],
+            ["apk", "add", "mesa-opencl-icd"]
+        ],
+        "debian": [
+            ["apt", "update"],
             ["apt", "install", "-y", "opencl-headers", "clinfo", "ocl-icd-libopencl1"],
             ["apt", "install", "-y", "intel-opencl-icd"],
             ["apt", "install", "-y", "mesa-opencl-icd"]
-        ]
-    elif distro == "fedora":
-        cmds = [
+        ],
+        "fedora": [
             ["dnf", "install", "-y", "opencl-headers", "clinfo", "ocl-icd"],
             ["dnf", "install", "-y", "intel-opencl"],
             ["dnf", "install", "-y", "mesa-libOpenCL"]
-        ]
-    elif distro == "arch":
-        cmds = [
+        ],
+        "arch": [
             ["pacman", "-S", "--noconfirm", "opencl-headers", "clinfo"],
             ["pacman", "-S", "--noconfirm", "intel-compute-runtime"],
             ["pacman", "-S", "--noconfirm", "opencl-mesa"]
-        ]
-    elif distro == "rhel":
-        cmds = [
+        ],
+        "rhel": [
             ["yum", "install", "-y", "opencl-headers", "clinfo", "ocl-icd"],
             ["yum", "install", "-y", "intel-opencl"],
             ["yum", "install", "-y", "mesa-libOpenCL"]
         ]
-    else:
+    }
+    
+    cmds = commands_map.get(distro, [])
+    if not cmds:
         return False
     
     for cmd in cmds:
         try:
-            subprocess.run(cmd, capture_output=True, check=False)
-        except:
+            subprocess.run(cmd, capture_output=True, check=False, timeout=60)
+        except (subprocess.TimeoutExpired, Exception):
             pass
     
     print("✅ OpenCL runtime installed")
     return True
 
-def install_pyopencl_linux():
+def install_pyopencl_linux() -> bool:
     """Install pyopencl using system package manager on Linux"""
     distro = get_linux_distro()
     
-    if distro == "alpine":
-        # On Alpine, pyopencl is called py3-opencl
+    package_map = {
+        "alpine": ["apk", "add", "py3-opencl"],
+        "debian": ["apt", "install", "-y", "python3-pyopencl"],
+        "fedora": ["dnf", "install", "-y", "python3-pyopencl"],
+        "arch": ["pacman", "-S", "--noconfirm", "python-pyopencl"]
+    }
+    
+    if distro in package_map:
         try:
-            subprocess.run(["apk", "add", "py3-opencl"], capture_output=True, check=True)
+            subprocess.run(package_map[distro], capture_output=True, check=True, timeout=60)
             return True
-        except:
-            pass
-    elif distro == "debian":
-        try:
-            subprocess.run(["apt", "install", "-y", "python3-pyopencl"], capture_output=True, check=True)
-            return True
-        except:
-            pass
-    elif distro == "fedora":
-        try:
-            subprocess.run(["dnf", "install", "-y", "python3-pyopencl"], capture_output=True, check=True)
-            return True
-        except:
-            pass
-    elif distro == "arch":
-        try:
-            subprocess.run(["pacman", "-S", "--noconfirm", "python-pyopencl"], capture_output=True, check=True)
-            return True
-        except:
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
             pass
     
     # Fallback to pip
     try:
-        subprocess.run([sys.executable, "-m", "pip", "install", "pyopencl"], capture_output=True, check=True)
+        subprocess.run([sys.executable, "-m", "pip", "install", "pyopencl"], 
+                      capture_output=True, check=True, timeout=120)
         return True
-    except:
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
         return False
 
 def try_import_opencl():
@@ -146,7 +140,7 @@ def try_import_opencl():
 
 # ==================== CHECK DEPENDENCIES ====================
 def check_dependencies():
-    """Check and install all dependencies (similar to official miner)"""
+    """Check and install all dependencies"""
     
     print("\n" + "="*60)
     print("🔍 Duino-Coin GPU Miner - Environment Check")
@@ -171,7 +165,7 @@ def check_dependencies():
             print("   (Required to install OpenCL runtime and py3-opencl)")
             sys.exit(1)
     
-    # Install required Python packages (like official miner)
+    # Install required Python packages
     required_packages = ["requests", "colorama", "numpy"]
     
     for package in required_packages:
@@ -182,24 +176,25 @@ def check_dependencies():
             print(f"❌ {package} not found, installing...")
             install_package(package)
     
-    # Now import colorama properly
+    # Setup colorama with proper fallback
     try:
         from colorama import init, Fore, Back, Style
         init(autoreset=True)
-    except:
-        # Fallback
-        class Fore:
-            RED = CYAN = GREEN = YELLOW = WHITE = MAGENTA = BLUE = ''
-        class Back:
-            RED = CYAN = GREEN = YELLOW = WHITE = MAGENTA = BLUE = ''
-        class Style:
-            BRIGHT = DIM = NORMAL = RESET_ALL = ''
+    except ImportError:
+        # Create robust fallback classes
+        class ColorFallback:
+            def __getattr__(self, name):
+                return ''
+        
+        Fore = ColorFallback()
+        Back = ColorFallback()
+        Style = ColorFallback()
     
     # Install OpenCL runtime (Linux only)
     if system == "Linux":
         print("\n🔧 Checking OpenCL runtime...")
         try:
-            result = subprocess.run(["clinfo"], capture_output=True)
+            result = subprocess.run(["clinfo"], capture_output=True, timeout=10)
             if result.returncode != 0:
                 print("⚠️ OpenCL runtime not found, installing...")
                 if install_opencl_runtime_linux():
@@ -220,6 +215,8 @@ def check_dependencies():
                 print("✅ OpenCL runtime installed")
                 print("⚠️ Please restart the miner!")
                 sys.exit(0)
+        except subprocess.TimeoutExpired:
+            print("⚠️ clinfo check timed out, continuing...")
     
     # Install pyopencl
     print("\n📦 Checking pyopencl...")
@@ -268,37 +265,29 @@ def check_dependencies():
         sys.exit(1)
     
     print("\n✅ All dependencies OK!\n")
-    return cl
+    return cl, Fore, Back, Style
 
 # Run dependency check
-cl = check_dependencies()
+cl, Fore, Back, Style = check_dependencies()
 
 # Import modules (after checks)
 import numpy as np
 import requests
-import socket
-import base64
-import random
-import json
-from datetime import datetime
-from colorama import init, Fore, Back, Style
-
-init(autoreset=True)
 
 # ==================== HELPER FUNCTIONS ====================
-def encode_mining_key(key):
+def encode_mining_key(key: str) -> str:
     """Encode mining key to Base64 if it's plain text."""
-    if not key or key == "None" or key == "none" or key == "":
+    if not key or key in ["None", "none", ""]:
         return "None"
     
-    import re
+    # Check if already base64
     is_base64 = re.match(r'^[A-Za-z0-9+/]+=*$', key) and len(key) % 4 == 0
     
     if is_base64 and len(key) > 8:
         try:
             base64.b64decode(key)
             return key
-        except:
+        except Exception:
             pass
     
     try:
@@ -309,7 +298,7 @@ def encode_mining_key(key):
         print(f"{Fore.YELLOW}⚠️ Could not encode mining key: {e}, using 'None'")
         return "None"
 
-def decode_mining_key(encoded_key):
+def decode_mining_key(encoded_key: str) -> str:
     """Decode Base64 mining key back to plain text for display."""
     if not encoded_key or encoded_key == "None":
         return "None"
@@ -317,17 +306,17 @@ def decode_mining_key(encoded_key):
     try:
         decoded = base64.b64decode(encoded_key).decode('utf-8')
         return decoded
-    except:
+    except Exception:
         return encoded_key
 
 # ==================== CONFIGURATION ====================
-def detect_gpus():
+def detect_gpus(cl_module) -> List[Dict[str, Any]]:
     """Auto detect and list all GPUs"""
     gpus = []
-    platforms = cl.get_platforms()
+    platforms = cl_module.get_platforms()
     
     for p_idx, p in enumerate(platforms):
-        devices = p.get_devices(device_type=cl.device_type.GPU)
+        devices = p.get_devices(device_type=cl_module.device_type.GPU)
         for d_idx, d in enumerate(devices):
             gpus.append({
                 'platform_idx': p_idx,
@@ -339,7 +328,7 @@ def detect_gpus():
             })
     return gpus
 
-def load_config():
+def load_config(cl_module) -> Dict[str, Any]:
     """Read configuration from config.txt"""
     config_file = "config.txt"
     
@@ -359,7 +348,7 @@ def load_config():
     
     # Auto detect GPU
     print(f"\n{Fore.CYAN}🔍 DETECTING GPU...")
-    gpus = detect_gpus()
+    gpus = detect_gpus(cl_module)
     
     if gpus:
         print(f"{Fore.GREEN}✅ Found {len(gpus)} GPU(s):")
@@ -408,10 +397,10 @@ RIG_ID = GPU_Miner
             sample_config += f"GPU_PLATFORM = {gpus[0]['platform_idx']}\n"
             sample_config += f"GPU_DEVICE = {gpus[0]['device_idx']}\n"
         else:
-            sample_config += f"GPU_PLATFORM = None\n"
-            sample_config += f"GPU_DEVICE = None\n"
+            sample_config += "GPU_PLATFORM = None\n"
+            sample_config += "GPU_DEVICE = None\n"
         
-        sample_config += f"""
+        sample_config += """
 # TRUE GPU POWER (1-100%)
 # 1% = GPU works 1% of time, sleeps 99%
 GPU_LOAD_PERCENT = 5
@@ -431,42 +420,61 @@ REPORT_INTERVAL = 300
         print(f"{Fore.CYAN}   🔹 Save and run again")
         sys.exit(0)
     
-    # Read config file
-    with open(config_file, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-            
-            if "=" in line:
-                key, value = line.split("=", 1)
-                key = key.strip()
-                value = value.strip()
+    # Read config file with proper error handling
+    try:
+        with open(config_file, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
                 
-                if key == "USERNAME":
-                    config["USERNAME"] = value
-                elif key == "MINING_KEY":
-                    if value and value != "None":
-                        config["MINING_KEY"] = encode_mining_key(value)
-                    else:
-                        config["MINING_KEY"] = "None"
-                elif key == "DIFFICULTY":
-                    config["DIFFICULTY"] = value.upper()
-                elif key == "RIG_ID":
-                    config["RIG_ID"] = value
-                elif key == "GPU_PLATFORM":
-                    config["GPU_PLATFORM"] = int(value) if value != "None" else None
-                elif key == "GPU_DEVICE":
-                    config["GPU_DEVICE"] = int(value) if value != "None" else None
-                elif key == "GPU_LOAD_PERCENT":
-                    val = int(value)
-                    config["GPU_LOAD_PERCENT"] = max(1, min(100, val))
-                elif key == "POOL_URL":
-                    config["POOL_URL"] = value
-                elif key == "SOC_TIMEOUT":
-                    config["SOC_TIMEOUT"] = int(value)
-                elif key == "REPORT_INTERVAL":
-                    config["REPORT_INTERVAL"] = int(value)
+                if "=" in line:
+                    key, value = line.split("=", 1)
+                    key = key.strip().upper()
+                    value = value.strip()
+                    
+                    if key == "USERNAME":
+                        config["USERNAME"] = value
+                    elif key == "MINING_KEY":
+                        if value and value != "None":
+                            config["MINING_KEY"] = encode_mining_key(value)
+                        else:
+                            config["MINING_KEY"] = "None"
+                    elif key == "DIFFICULTY":
+                        config["DIFFICULTY"] = value.upper()
+                    elif key == "RIG_ID":
+                        config["RIG_ID"] = value
+                    elif key == "GPU_PLATFORM":
+                        try:
+                            config["GPU_PLATFORM"] = int(value) if value != "None" else None
+                        except ValueError:
+                            config["GPU_PLATFORM"] = None
+                    elif key == "GPU_DEVICE":
+                        try:
+                            config["GPU_DEVICE"] = int(value) if value != "None" else None
+                        except ValueError:
+                            config["GPU_DEVICE"] = None
+                    elif key == "GPU_LOAD_PERCENT":
+                        try:
+                            val = int(value)
+                            config["GPU_LOAD_PERCENT"] = max(1, min(100, val))
+                        except ValueError:
+                            config["GPU_LOAD_PERCENT"] = 5
+                    elif key == "POOL_URL":
+                        config["POOL_URL"] = value
+                    elif key == "SOC_TIMEOUT":
+                        try:
+                            config["SOC_TIMEOUT"] = int(value)
+                        except ValueError:
+                            config["SOC_TIMEOUT"] = 10
+                    elif key == "REPORT_INTERVAL":
+                        try:
+                            config["REPORT_INTERVAL"] = int(value)
+                        except ValueError:
+                            config["REPORT_INTERVAL"] = 300
+    except Exception as e:
+        print(f"{Fore.RED}❌ Error reading config file: {e}")
+        sys.exit(1)
     
     # Validate required info
     if config["USERNAME"] == "your_username":
@@ -478,7 +486,7 @@ REPORT_INTERVAL = 300
 
 # ==================== OPENCL KERNEL ====================
 OPENCL_KERNEL = """
-// SHA1 implementation for OpenCL
+// SHA1 implementation for OpenCL - Optimized version
 #define LEFT_ROTATE(x, n) (((x) << (n)) | ((x) >> (32 - (n))))
 
 void sha1_transform(uint *state, const uchar *data) {
@@ -486,20 +494,25 @@ void sha1_transform(uint *state, const uchar *data) {
     uint a, b, c, d, e, temp;
     int i;
     
+    // Initialize first 16 words
     for (i = 0; i < 16; i++) {
         w[i] = ((uint)data[i*4] << 24) | ((uint)data[i*4+1] << 16) | 
                ((uint)data[i*4+2] << 8) | (uint)data[i*4+3];
     }
+    
+    // Extend to 80 words
     for (i = 16; i < 80; i++) {
         w[i] = LEFT_ROTATE(w[i-3] ^ w[i-8] ^ w[i-14] ^ w[i-16], 1);
     }
     
+    // Initialize working variables
     a = state[0];
     b = state[1];
     c = state[2];
     d = state[3];
     e = state[4];
     
+    // Main loop
     for (i = 0; i < 80; i++) {
         if (i < 20) {
             temp = LEFT_ROTATE(a, 5) + ((b & c) | (~b & d)) + e + 0x5A827999 + w[i];
@@ -517,6 +530,7 @@ void sha1_transform(uint *state, const uchar *data) {
         a = temp;
     }
     
+    // Add to state
     state[0] += a;
     state[1] += b;
     state[2] += c;
@@ -541,19 +555,23 @@ __kernel void ducos1_gpu(
     uint max_nonce = 100 * difficulty;
     
     while (nonce <= max_nonce && *result_nonce == 0) {
+        // Prepare message
         uchar message[64] = {0};
         for (int i = 0; i < 20; i++) {
             message[i] = last_hash[i];
         }
         
+        // Add nonce as big-endian
         message[20] = (nonce >> 24) & 0xFF;
         message[21] = (nonce >> 16) & 0xFF;
         message[22] = (nonce >> 8) & 0xFF;
         message[23] = nonce & 0xFF;
         
+        // SHA1
         uint state[5] = {0x67452301, 0xEFCDAB89, 0x98BADCFE, 0x10325476, 0xC3D2E1F0};
         sha1_transform(state, message);
         
+        // Convert to bytes
         uchar hash_result[20];
         for (int i = 0; i < 5; i++) {
             hash_result[i*4] = (state[i] >> 24) & 0xFF;
@@ -562,6 +580,7 @@ __kernel void ducos1_gpu(
             hash_result[i*4+3] = state[i] & 0xFF;
         }
         
+        // Compare with target
         bool match = true;
         for (int i = 0; i < 20; i++) {
             if (hash_result[i] != target_hash[i]) {
@@ -571,7 +590,7 @@ __kernel void ducos1_gpu(
         }
         
         if (match) {
-            *result_nonce = nonce;
+            atomic_cmpxchg(result_nonce, 0, nonce);
             return;
         }
         
@@ -582,42 +601,66 @@ __kernel void ducos1_gpu(
 
 # ==================== GPU MINER CLASS ====================
 class GPUMiner:
-    def __init__(self, config):
+    def __init__(self, config: Dict[str, Any], cl_module):
         self.config = config
+        self.cl = cl_module
         self.platform = None
         self.device = None
         self.context = None
         self.queue = None
         self.program = None
-        self.kernel = None  # Store kernel reference to avoid RepeatedKernelRetrieval
+        self.kernel = None
+        self.max_work_size = 0
         self.stats = {
             'accepted': 0,
             'rejected': 0,
             'blocks': 0,
-            'total_hashrate': 0
+            'total_hashrate': 0.0
         }
         
+    def __del__(self):
+        """Cleanup OpenCL resources"""
+        self.cleanup()
+    
+    def cleanup(self):
+        """Release OpenCL resources properly"""
+        try:
+            if hasattr(self, 'kernel') and self.kernel:
+                del self.kernel
+            if hasattr(self, 'program') and self.program:
+                del self.program
+            if hasattr(self, 'queue') and self.queue:
+                del self.queue
+            if hasattr(self, 'context') and self.context:
+                del self.context
+        except Exception:
+            pass
+    
     def init_gpu(self):
-        platforms = cl.get_platforms()
+        """Initialize GPU device"""
+        platforms = self.cl.get_platforms()
         if not platforms:
-            raise Exception("No OpenCL platform found!")
+            raise RuntimeError("No OpenCL platform found!")
         
+        # Select platform
         if self.config["GPU_PLATFORM"] is not None:
             self.platform = platforms[self.config["GPU_PLATFORM"]]
         else:
+            # Auto-select first platform with GPU
             for p in platforms:
-                devices = p.get_devices(device_type=cl.device_type.GPU)
+                devices = p.get_devices(device_type=self.cl.device_type.GPU)
                 if devices:
                     self.platform = p
                     break
             if not self.platform:
                 self.platform = platforms[0]
         
-        devices = self.platform.get_devices(device_type=cl.device_type.GPU)
+        # Select device
+        devices = self.platform.get_devices(device_type=self.cl.device_type.GPU)
         if not devices:
             devices = self.platform.get_devices()
         
-        if self.config["GPU_DEVICE"] is not None:
+        if self.config["GPU_DEVICE"] is not None and self.config["GPU_DEVICE"] < len(devices):
             self.device = devices[self.config["GPU_DEVICE"]]
         else:
             self.device = devices[0]
@@ -626,53 +669,88 @@ class GPUMiner:
         print(f"{Fore.CYAN}   - Compute units: {self.device.max_compute_units}")
         print(f"{Fore.CYAN}   - Memory: {self.device.global_mem_size // (1024*1024)} MB")
         
-        self.max_work_size = self.device.max_work_group_size * self.device.max_compute_units
+        # Calculate optimal work size
+        self.max_work_size = self.device.max_work_group_size * self.device.max_compute_units * 4
+        print(f"{Fore.CYAN}   - Max work group size: {self.device.max_work_group_size}")
         print(f"{Fore.CYAN}   - Max parallel threads: {self.max_work_size}")
         
-        self.context = cl.Context([self.device])
-        self.queue = cl.CommandQueue(self.context)
+        # Create context and queue
+        self.context = self.cl.Context([self.device])
+        self.queue = self.cl.CommandQueue(self.context)
         
+        # Compile kernel
         print(f"{Fore.YELLOW}⏳ Compiling OpenCL kernel...")
-        self.program = cl.Program(self.context, OPENCL_KERNEL).build()
-        # CREATE KERNEL ONCE AND REUSE IT (FIX FOR RepeatedKernelRetrieval)
-        self.kernel = cl.Kernel(self.program, "ducos1_gpu")
-        print(f"{Fore.GREEN}✅ Kernel ready!")
+        try:
+            self.program = self.cl.Program(self.context, OPENCL_KERNEL).build()
+            self.kernel = self.cl.Kernel(self.program, "ducos1_gpu")
+            print(f"{Fore.GREEN}✅ Kernel compiled successfully!")
+        except Exception as e:
+            print(f"{Fore.RED}❌ Kernel compilation failed: {e}")
+            raise
         
-    def solve_job(self, last_hash_hex, target_hex, difficulty):
-        """Solve job with TRUE power control"""
+    def solve_job(self, last_hash_hex: str, target_hex: str, difficulty: int) -> Tuple[int, float, float]:
+        """Solve mining job with power control"""
         
-        last_hash_bytes = bytes.fromhex(last_hash_hex)
-        target_bytes = bytes.fromhex(target_hex)
+        try:
+            last_hash_bytes = bytes.fromhex(last_hash_hex)
+            target_bytes = bytes.fromhex(target_hex)
+        except ValueError as e:
+            print(f"{Fore.RED}❌ Invalid hash format: {e}")
+            return 0, 0.0, 0.0
         
+        # Calculate work size based on GPU load percentage
         work_size = max(64, int(self.max_work_size * self.config["GPU_LOAD_PERCENT"] / 100))
         
-        last_hash_buf = cl.Buffer(self.context, cl.mem_flags.READ_ONLY | cl.mem_flags.COPY_HOST_PTR, 
-                                   hostbuf=last_hash_bytes)
-        target_buf = cl.Buffer(self.context, cl.mem_flags.READ_ONLY | cl.mem_flags.COPY_HOST_PTR,
-                                hostbuf=target_bytes)
-        result_nonce_buf = cl.Buffer(self.context, cl.mem_flags.WRITE_ONLY, 4)
+        # Create buffers
+        last_hash_buf = self.cl.Buffer(
+            self.context, 
+            self.cl.mem_flags.READ_ONLY | self.cl.mem_flags.COPY_HOST_PTR, 
+            hostbuf=last_hash_bytes
+        )
+        target_buf = self.cl.Buffer(
+            self.context, 
+            self.cl.mem_flags.READ_ONLY | self.cl.mem_flags.COPY_HOST_PTR,
+            hostbuf=target_bytes
+        )
+        result_nonce_buf = self.cl.Buffer(
+            self.context, 
+            self.cl.mem_flags.WRITE_ONLY, 
+            4
+        )
+        
+        # Initialize result to 0
+        zero_nonce = np.zeros(1, dtype=np.uint32)
+        self.cl.enqueue_copy(self.queue, result_nonce_buf, zero_nonce)
         
         solve_start = time.time()
         
-        # REUSE EXISTING KERNEL INSTEAD OF CREATING NEW ONE
+        # Set kernel arguments
         self.kernel.set_arg(0, last_hash_buf)
         self.kernel.set_arg(1, target_buf)
         self.kernel.set_arg(2, np.uint32(difficulty))
         self.kernel.set_arg(3, np.uint32(work_size))
         self.kernel.set_arg(4, result_nonce_buf)
         
+        # Execute kernel
         local_size = min(64, work_size)
         global_size = ((work_size + local_size - 1) // local_size) * local_size
         
-        event = cl.enqueue_nd_range_kernel(self.queue, self.kernel, (global_size,), (local_size,))
-        event.wait()
+        try:
+            event = self.cl.enqueue_nd_range_kernel(
+                self.queue, self.kernel, (global_size,), (local_size,)
+            )
+            event.wait()
+        except Exception as e:
+            print(f"{Fore.RED}❌ Kernel execution error: {e}")
+            return 0, 0.0, 0.0
         
+        # Get result
         result_nonce = np.zeros(1, dtype=np.uint32)
-        cl.enqueue_copy(self.queue, result_nonce, result_nonce_buf).wait()
+        self.cl.enqueue_copy(self.queue, result_nonce, result_nonce_buf).wait()
         
         solve_time = time.time() - solve_start
         
-        # TRUE POWER THROTTLING
+        # Power throttling
         power_percent = self.config["GPU_LOAD_PERCENT"]
         if power_percent < 100 and result_nonce[0] == 0:
             if solve_time > 0 and power_percent > 0:
@@ -681,69 +759,143 @@ class GPUMiner:
                 if sleep_time > 0.001:
                     time.sleep(sleep_time)
         
+        # Calculate hashrate if solution found
         if result_nonce[0] > 0:
-            hashrate = 1_000_000_000 * result_nonce[0] / (solve_time * 1e9) if solve_time > 0 else 0
-            return result_nonce[0], hashrate, solve_time
+            hashrate = (result_nonce[0] / solve_time) if solve_time > 0 else 0
+            return int(result_nonce[0]), hashrate, solve_time
         
         return 0, 0.0, solve_time
 
 # ==================== NETWORK CLIENT ====================
 class DuinoClient:
-    def __init__(self, config):
+    def __init__(self, config: Dict[str, Any]):
         self.config = config
         self.socket = None
-        
-    def get_pool(self):
+        self.connected = False
+    
+    def __del__(self):
+        self.close()
+    
+    def get_pool(self) -> Tuple[str, int, str]:
+        """Get mining pool from server"""
         try:
-            resp = requests.get(self.config["POOL_URL"], timeout=10).json()
+            resp = requests.get(
+                self.config["POOL_URL"], 
+                timeout=10,
+                headers={'User-Agent': 'Duino-GPU-Miner/2.0'}
+            ).json()
             if resp.get("success"):
                 return (resp["ip"], resp["port"], resp.get("name", "Unknown"))
-        except Exception as e:
-            print(f"{Fore.RED}❌ Pool error: {e}")
+        except requests.RequestException as e:
+            print(f"{Fore.RED}❌ Pool connection error: {e}")
+        except json.JSONDecodeError as e:
+            print(f"{Fore.RED}❌ Invalid pool response: {e}")
+        
+        # Return default pool as fallback
         return ("server.duinocoin.com", 14625, "Default")
     
-    def connect(self, pool):
+    def connect(self, pool: Tuple[str, int, str]) -> Tuple[str, str]:
+        """Connect to mining pool"""
         ip, port, name = pool
+        
+        if self.connected:
+            self.close()
+        
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.socket.settimeout(self.config["SOC_TIMEOUT"])
-        self.socket.connect((ip, port))
-        version = self.socket.recv(128).decode().strip()
-        return version, name
+        
+        try:
+            self.socket.connect((ip, port))
+            version = self.socket.recv(128).decode().strip()
+            self.connected = True
+            return version, name
+        except (socket.timeout, ConnectionRefusedError) as e:
+            raise ConnectionError(f"Connection failed: {e}")
     
-    def send_job_request(self, username, difficulty, mining_key):
+    def send_job_request(self, username: str, difficulty: str, mining_key: str) -> Tuple[Optional[str], Optional[str], Optional[int]]:
+        """Request mining job"""
+        if not self.connected or not self.socket:
+            return None, None, None
+        
         key = mining_key if mining_key != "None" else "None"
         msg = f"JOB,{username},{difficulty},{key}\n"
-        self.socket.send(msg.encode())
-        data = self.socket.recv(256).decode().strip()
-        parts = data.split(',')
-        if len(parts) == 3:
-            return parts[0], parts[1], int(parts[2])
+        
+        try:
+            self.socket.send(msg.encode())
+            data = self.socket.recv(256).decode().strip()
+            parts = data.split(',')
+            if len(parts) == 3:
+                return parts[0], parts[1], int(parts[2])
+        except (socket.timeout, ConnectionError, ValueError) as e:
+            print(f"{Fore.RED}❌ Job request failed: {e}")
+            self.connected = False
+        
         return None, None, None
     
-    def submit_solution(self, nonce, hashrate, miner_name, rig_id, group_id):
+    def submit_solution(self, nonce: int, hashrate: float, miner_name: str, rig_id: str, group_id: int) -> Optional[str]:
+        """Submit mining solution"""
+        if not self.connected or not self.socket:
+            return None
+        
         msg = f"{nonce},{hashrate:.2f},{miner_name},{rig_id},{group_id}\n"
-        self.socket.send(msg.encode())
-        feedback = self.socket.recv(64).decode().strip()
-        return feedback
+        
+        try:
+            self.socket.send(msg.encode())
+            feedback = self.socket.recv(64).decode().strip()
+            return feedback
+        except (socket.timeout, ConnectionError) as e:
+            print(f"{Fore.RED}❌ Solution submission failed: {e}")
+            self.connected = False
+            return None
     
     def close(self):
+        """Close socket connection properly"""
         if self.socket:
-            self.socket.close()
+            try:
+                self.socket.close()
+            except Exception:
+                pass
+            finally:
+                self.socket = None
+                self.connected = False
 
-# ==================== MAIN ====================
-def format_hashrate(h):
-    if h >= 1e9: return f"{h/1e9:.2f} GH/s"
-    if h >= 1e6: return f"{h/1e6:.2f} MH/s"
-    if h >= 1e3: return f"{h/1e3:.2f} kH/s"
+# ==================== UTILITY FUNCTIONS ====================
+def format_hashrate(h: float) -> str:
+    """Format hashrate in human readable format"""
+    if h >= 1e9:
+        return f"{h/1e9:.2f} GH/s"
+    if h >= 1e6:
+        return f"{h/1e6:.2f} MH/s"
+    if h >= 1e3:
+        return f"{h/1e3:.2f} kH/s"
     return f"{h:.2f} H/s"
 
+def format_uptime(seconds: int) -> str:
+    """Format uptime in human readable format"""
+    hours = seconds // 3600
+    minutes = (seconds % 3600) // 60
+    secs = seconds % 60
+    
+    parts = []
+    if hours > 0:
+        parts.append(f"{hours}h")
+    if minutes > 0:
+        parts.append(f"{minutes}m")
+    parts.append(f"{secs}s")
+    
+    return " ".join(parts)
+
+# ==================== MAIN ====================
 def main():
+    """Main mining loop"""
     print(f"{Fore.CYAN}{'='*60}")
-    print(f"{Fore.YELLOW}🪙 Duino-Coin GPU Miner - TRUE Power Control 1-100%")
+    print(f"{Fore.YELLOW}🪙 Duino-Coin GPU Miner v2.0 - Enhanced Edition")
     print(f"{Fore.CYAN}{'='*60}")
     
-    config = load_config()
+    # Load configuration
+    config = load_config(cl)
     
+    # Display configuration
     display_key = decode_mining_key(config["MINING_KEY"])
     if display_key != "None" and len(display_key) > 8:
         display_key = display_key[:4] + "..." + display_key[-4:]
@@ -755,13 +907,16 @@ def main():
     print(f"{Fore.CYAN}   🖥️ Rig ID: {config['RIG_ID']}")
     print(f"{Fore.CYAN}   ⚡ GPU Power: {config['GPU_LOAD_PERCENT']}%")
     
-    miner = GPUMiner(config)
+    # Initialize GPU miner
+    miner = GPUMiner(config, cl)
     try:
         miner.init_gpu()
     except Exception as e:
-        print(f"{Fore.RED}❌ GPU Error: {e}")
+        print(f"{Fore.RED}❌ GPU Initialization Error: {e}")
+        print(f"{Fore.YELLOW}   Please check your OpenCL installation and GPU drivers")
         return
     
+    # Initialize network client
     client = DuinoClient(config)
     stats = miner.stats
     start_time = time.time()
@@ -770,70 +925,124 @@ def main():
     
     print(f"\n{Fore.GREEN}✅ START MINING!")
     print(f"{Fore.YELLOW}   ⚡ GPU will be used only {config['GPU_LOAD_PERCENT']}% of the time")
-    print(f"{Fore.CYAN}   📊 Dashboard: https://duinocoin.com/dashboard\n")
+    print(f"{Fore.CYAN}   📊 Dashboard: https://duinocoin.com/dashboard")
+    print(f"{Fore.CYAN}   Press Ctrl+C to stop mining\n")
     
-    while True:
-        try:
-            pool = client.get_pool()
-            version, pool_name = client.connect(pool)
-            print(f"{Fore.GREEN}✅ Connected to {pool_name} | v{version}")
-            
-            while True:
-                last_hash, target_hash, difficulty = client.send_job_request(
-                    config["USERNAME"], config["DIFFICULTY"], config["MINING_KEY"]
-                )
+    reconnect_attempts = 0
+    max_reconnect_attempts = 10
+    
+    try:
+        while True:
+            try:
+                # Get pool and connect
+                pool = client.get_pool()
+                version, pool_name = client.connect(pool)
+                print(f"{Fore.GREEN}✅ Connected to {pool_name} | v{version}")
+                reconnect_attempts = 0  # Reset counter on successful connection
                 
-                if not last_hash:
-                    time.sleep(1)
-                    continue
-                
-                nonce, hashrate, solve_time = miner.solve_job(last_hash, target_hash, difficulty)
-                
-                if nonce > 0:
-                    feedback = client.submit_solution(
-                        nonce, hashrate, "GPU_Miner", config["RIG_ID"], group_id
+                while True:
+                    # Request job
+                    last_hash, target_hash, difficulty = client.send_job_request(
+                        config["USERNAME"], config["DIFFICULTY"], config["MINING_KEY"]
                     )
                     
-                    if feedback == "GOOD":
-                        stats['accepted'] += 1
-                        stats['total_hashrate'] = hashrate
-                        print(f"{Fore.GREEN}✅ ACC #{stats['accepted']} | {format_hashrate(hashrate)} | Diff:{difficulty}")
+                    if not last_hash:
+                        time.sleep(1)
+                        continue
                     
-                    elif feedback == "BLOCK":
-                        stats['blocks'] += 1
-                        stats['accepted'] += 1
-                        print(f"{Fore.YELLOW}⛓️🎉 BLOCK #{stats['blocks']} FOUND! +10 DUCO")
+                    # Solve job
+                    nonce, hashrate, solve_time = miner.solve_job(
+                        last_hash, target_hash, difficulty
+                    )
                     
-                    elif feedback.startswith("BAD"):
-                        stats['rejected'] += 1
-                        reason = feedback.split(',')[1] if ',' in feedback else "unknown"
-                        print(f"{Fore.RED}❌ REJECT | {reason}")
+                    if nonce > 0:
+                        feedback = client.submit_solution(
+                            nonce, hashrate, "GPU_Miner", config["RIG_ID"], group_id
+                        )
+                        
+                        if feedback is None:
+                            print(f"{Fore.RED}❌ Connection lost, reconnecting...")
+                            break
+                        
+                        if feedback == "GOOD":
+                            stats['accepted'] += 1
+                            stats['total_hashrate'] = hashrate
+                            print(f"{Fore.GREEN}✅ ACC #{stats['accepted']} | "
+                                  f"{format_hashrate(hashrate)} | "
+                                  f"Diff:{difficulty} | "
+                                  f"Time:{solve_time:.3f}s")
+                        
+                        elif feedback == "BLOCK":
+                            stats['blocks'] += 1
+                            stats['accepted'] += 1
+                            print(f"{Fore.YELLOW}⛓️🎉 BLOCK #{stats['blocks']} FOUND! +10 DUCO!")
+                        
+                        elif feedback.startswith("BAD"):
+                            stats['rejected'] += 1
+                            reason = feedback.split(',')[1] if ',' in feedback else "unknown"
+                            print(f"{Fore.RED}❌ REJECT #{stats['rejected']} | "
+                                  f"Reason: {reason} | "
+                                  f"Diff:{difficulty}")
+                    
+                    # Periodic report
+                    if time.time() - last_report >= config["REPORT_INTERVAL"]:
+                        uptime = int(time.time() - start_time)
+                        total = stats['accepted'] + stats['rejected']
+                        accept_rate = (stats['accepted'] / total * 100) if total > 0 else 0
+                        
+                        print(f"\n{Fore.CYAN}{'='*50}")
+                        print(f"{Fore.YELLOW}📊 PERIODIC REPORT")
+                        print(f"{Fore.CYAN}   ✅ Accepted: {stats['accepted']}")
+                        print(f"{Fore.CYAN}   ❌ Rejected: {stats['rejected']}")
+                        print(f"{Fore.CYAN}   ⛓️ Blocks: {stats['blocks']}")
+                        print(f"{Fore.CYAN}   📈 Accept Rate: {accept_rate:.1f}%")
+                        print(f"{Fore.CYAN}   🚀 Hashrate: {format_hashrate(stats['total_hashrate'])}")
+                        print(f"{Fore.CYAN}   ⚡ Target Power: {config['GPU_LOAD_PERCENT']}%")
+                        print(f"{Fore.CYAN}   ⏱️ Uptime: {format_uptime(uptime)}")
+                        print(f"{Fore.CYAN}{'='*50}\n")
+                        
+                        last_report = time.time()
+                    
+            except (ConnectionError, socket.timeout) as e:
+                reconnect_attempts += 1
+                print(f"{Fore.RED}❌ Connection error: {e}")
+                print(f"{Fore.YELLOW}   Reconnect attempt {reconnect_attempts}/{max_reconnect_attempts}")
                 
-                if time.time() - last_report >= config["REPORT_INTERVAL"]:
-                    uptime = int(time.time() - start_time)
-                    total = stats['accepted'] + stats['rejected']
-                    rate = (stats['accepted'] / total * 100) if total > 0 else 0
-                    
-                    print(f"\n{Fore.CYAN}{'='*50}")
-                    print(f"{Fore.YELLOW}📊 PERIODIC REPORT")
-                    print(f"{Fore.CYAN}   ✅ Accepted: {stats['accepted']}")
-                    print(f"{Fore.CYAN}   ❌ Rejected: {stats['rejected']}")
-                    print(f"{Fore.CYAN}   ⛓️ Blocks: {stats['blocks']}")
-                    print(f"{Fore.CYAN}   📈 Accept Rate: {rate:.1f}%")
-                    print(f"{Fore.CYAN}   🚀 Hashrate: {format_hashrate(stats['total_hashrate'])}")
-                    print(f"{Fore.CYAN}   ⚡ Target Power: {config['GPU_LOAD_PERCENT']}%")
-                    print(f"{Fore.CYAN}   ⏱️ Uptime: {uptime//3600}h {(uptime%3600)//60}m")
-                    print(f"{Fore.CYAN}{'='*50}\n")
-                    
-                    last_report = time.time()
+                if reconnect_attempts >= max_reconnect_attempts:
+                    print(f"{Fore.RED}❌ Max reconnection attempts reached, restarting...")
+                    reconnect_attempts = 0
                 
-        except Exception as e:
-            print(f"{Fore.RED}❌ Error: {e}")
-            time.sleep(5)
-            continue
+                time.sleep(5)
+                continue
+            
+            except Exception as e:
+                print(f"{Fore.RED}❌ Unexpected error: {e}")
+                time.sleep(5)
+                continue
+    
+    except KeyboardInterrupt:
+        print(f"\n{Fore.YELLOW}👋 Mining stopped by user")
+    
+    finally:
+        # Clean shutdown
+        print(f"{Fore.CYAN}🧹 Cleaning up resources...")
+        client.close()
+        miner.cleanup()
+        
+        # Final stats
+        uptime = int(time.time() - start_time)
+        total = stats['accepted'] + stats['rejected']
+        accept_rate = (stats['accepted'] / total * 100) if total > 0 else 0
+        
+        print(f"\n{Fore.GREEN}{'='*50}")
+        print(f"{Fore.YELLOW}📊 FINAL STATISTICS")
+        print(f"{Fore.CYAN}   ✅ Accepted: {stats['accepted']}")
+        print(f"{Fore.CYAN}   ❌ Rejected: {stats['rejected']}")
+        print(f"{Fore.CYAN}   ⛓️ Blocks: {stats['blocks']}")
+        print(f"{Fore.CYAN}   📈 Accept Rate: {accept_rate:.1f}%")
+        print(f"{Fore.CYAN}   ⏱️ Total Uptime: {format_uptime(uptime)}")
+        print(f"{Fore.GREEN}{'='*50}")
+        print(f"{Fore.YELLOW}👋 Goodbye! GPU is now idle.")
 
 if __name__ == "__main__":
-    try:
-        main()
-    except KeyboardInterrupt:
-        print(f"\n{Fore.YELLOW}👋 Goodbye! GPU is now idle.")
+    main()
