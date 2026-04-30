@@ -17,8 +17,8 @@ import json
 from typing import Dict, List, Optional, Tuple, Any
 from urllib.parse import urlparse
 
-MINER_VER = "4.3-gpu2"
-SOFTWARE_NAME = f"Unofficial OpenCL PC/GPU Miner {MINER_VER}"
+MINER_VER = "1.0.0.1"
+SOFTWARE_NAME = f"Unofficial OpenCL GPU Miner {MINER_VER}"
 REQUEST_USER_AGENT = f"Duino-Coin-{SOFTWARE_NAME.replace(' ', '-')}"
 UINT32_MAX = 0xFFFFFFFF
 REQUIRED_GPU_DIFFICULTY = "EXTREME"
