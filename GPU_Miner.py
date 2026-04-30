@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Duino-Coin GPU Miner – Intel Arc Compatible (Fixed set_arg index)
+Duino-Coin GPU Miner – Fixed 10s Sleep per Chunk
 """
 
 import sys, os, subprocess, platform, time, re, socket, secrets, json
@@ -16,6 +16,7 @@ DEFAULT_GPU_LOAD_PERCENT = 25
 AUTO_INSTALL_ENV = "DUCO_GPU_MINER_AUTO_INSTALL"
 ALLOW_CUSTOM_POOL_ENV = "DUCO_GPU_MINER_ALLOW_CUSTOM_POOL"
 
+# ==================== DEPENDENCY HELPERS ====================
 def env_flag(name): return os.environ.get(name,"").strip().lower() in {"1","true","yes","y"}
 
 def install_package(pkg):
@@ -130,7 +131,15 @@ def detect_gpus(cl_mod):
 # ---------- load config.txt ----------
 def load_config(cl_mod):
     if not os.path.exists("config.txt"):
-        print("❌ config.txt not found!"); sys.exit(1)
+        with open("config.txt","w") as f:
+            f.write("# Duino-Coin GPU Miner Configuration\n")
+            f.write("USERNAME = your_username\n")
+            f.write("MINING_KEY = None\n")
+            f.write("RIG_ID = GPU_Miner\n")
+            f.write("GPU_LOAD_PERCENT = 25\n")
+            f.write("POOL_URL = https://server.duinocoin.com/getPool\n")
+        print("📝 Created sample config.txt. Please edit and re-run."); sys.exit(0)
+    
     cfg = {}
     with open("config.txt","r") as f:
         for line in f:
@@ -140,7 +149,8 @@ def load_config(cl_mod):
             k,v = line.split("=",1)
             cfg[k.strip().upper()] = v.strip().strip('"').strip("'")
     USERNAME = cfg.get("USERNAME","")
-    if not USERNAME: print("❌ USERNAME missing in config.txt"); sys.exit(1)
+    if not USERNAME or USERNAME == "your_username":
+        print("❌ Please edit config.txt with your real username."); sys.exit(1)
     MINING_KEY = cfg.get("MINING_KEY","None")
     RIG_ID = cfg.get("RIG_ID","GPU_Miner")
     GPU_LOAD = max(1, min(100, int(cfg.get("GPU_LOAD_PERCENT", DEFAULT_GPU_LOAD_PERCENT))))
@@ -164,7 +174,7 @@ def load_config(cl_mod):
     if not validate_pool_url(config["POOL_URL"]): sys.exit(1)
     return config
 
-# ---------- OpenCL kernel (fixed) ----------
+# ---------- OpenCL kernel (Intel Arc compatible) ----------
 OPENCL_KERNEL = """
 #define UINT32_MAX 0xFFFFFFFF
 #define LEFT_ROTATE(x, n) (((x) << (n)) | ((x) >> (32 - (n))))
@@ -226,7 +236,7 @@ __kernel void ducos1_gpu(
 }
 """
 
-# ---------- GPU Miner class (FIXED set_arg indices) ----------
+# ---------- GPU Miner class ----------
 class GPUMiner:
     def __init__(self, config, cl_mod):
         self.config = config
@@ -262,6 +272,9 @@ class GPUMiner:
 
         chunk_items = max(64, int(self.max_work * self.config["GPU_LOAD_PERCENT"] / 100))
         max_nonce = 100 * difficulty
+        power = self.config["GPU_LOAD_PERCENT"]
+
+        print(f"{Fore.CYAN}   [GPU] Chunk: {chunk_items}, Max nonce: {max_nonce}, Power: {power}% (fixed 10s sleep)")
 
         buf_last = self.cl.Buffer(self.ctx, self.cl.mem_flags.READ_ONLY | self.cl.mem_flags.COPY_HOST_PTR, hostbuf=last_bytes)
         buf_target = self.cl.Buffer(self.ctx, self.cl.mem_flags.READ_ONLY | self.cl.mem_flags.COPY_HOST_PTR, hostbuf=target_bytes)
@@ -270,15 +283,14 @@ class GPUMiner:
         init_val = np.full(1, UINT32_MAX, dtype=np.uint32)
         self.cl.enqueue_copy(self.queue, buf_result, init_val)
 
-        # CRITICAL: set kernel args in correct order
-        self.kernel.set_arg(0, buf_last)      # __global const uchar *last_hash
-        self.kernel.set_arg(1, buf_target)    # __global const uchar *target_hash
-        # args 2 and 3 will be set per-chunk
-        self.kernel.set_arg(4, buf_result)    # volatile __global uint *result_nonce (INDEX 4)
+        self.kernel.set_arg(0, buf_last)
+        self.kernel.set_arg(1, buf_target)
+        self.kernel.set_arg(4, buf_result)
 
         start_time = time.time()
         total_checked = 0
         start_nonce = 0
+
         while start_nonce <= max_nonce:
             current_items = min(chunk_items, max_nonce - start_nonce + 1)
             local = min(64, current_items)
@@ -292,14 +304,17 @@ class GPUMiner:
 
             res = np.zeros(1, dtype=np.uint32)
             self.cl.enqueue_copy(self.queue, res, buf_result).wait()
+
             if res[0] != UINT32_MAX:
                 elapsed = time.time() - start_time
                 hr = total_checked / elapsed if elapsed > 0 else 0.0
                 print(f"{Fore.GREEN}✅ Found nonce {res[0]}, Real HR: {hr/1e3:.2f} kH/s")
                 return int(res[0]), hr, elapsed
 
-            if self.config["GPU_LOAD_PERCENT"] < 100:
-                time.sleep(0.002)
+            # --- CỐ ĐỊNH NGHỈ 10 GIÂY ---
+            if power < 100:
+                time.sleep(10)
+
             start_nonce += current_items
 
         elapsed = time.time() - start_time
@@ -361,10 +376,10 @@ def f_uptime(s):
 
 # ---------- main ----------
 def main():
-    print(f"{Fore.CYAN}{'='*60}\n{Fore.YELLOW}🪙 Duino-Coin GPU Miner – set_arg fixed\n{Fore.CYAN}{'='*60}")
+    print(f"{Fore.CYAN}{'='*60}\n{Fore.YELLOW}🪙 Duino-Coin GPU Miner – Fixed 10s Sleep\n{Fore.CYAN}{'='*60}")
     if not check_disallowed_hosting(): sys.exit(1)
     config = load_config(cl)
-    print(f"{Fore.GREEN}📋 {config['USERNAME']} | Key: {mask_key(config['MINING_KEY'])} | Power: {config['GPU_LOAD_PERCENT']}%")
+    print(f"{Fore.GREEN}📋 {config['USERNAME']} | Key: {mask_key(config['MINING_KEY'])} | Power: {config['GPU_LOAD_PERCENT']}% (fixed 10s)")
 
     miner = GPUMiner(config, cl)
     miner.init_gpu()
