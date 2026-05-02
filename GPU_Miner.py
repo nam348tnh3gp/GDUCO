@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Duino-Coin GPU Miner – Merged Stable + 10s Sleep
+Duino-Coin GPU Miner – Full chunk, then sleep 10s
 """
 
 import sys, os, subprocess, platform, time, re, socket, secrets, json
@@ -274,7 +274,7 @@ class GPUMiner:
         max_nonce = 100 * difficulty
         power = self.config["GPU_LOAD_PERCENT"]
 
-        print(f"{Fore.CYAN}   [GPU] Chunk: {chunk_items}, Max nonce: {max_nonce}, Power: {power}% (fixed 10s sleep)")
+        print(f"{Fore.CYAN}   [GPU] Chunk: {chunk_items}, Max nonce: {max_nonce}, Power: {power}%")
 
         buf_last = self.cl.Buffer(self.ctx, self.cl.mem_flags.READ_ONLY | self.cl.mem_flags.COPY_HOST_PTR, hostbuf=last_bytes)
         buf_target = self.cl.Buffer(self.ctx, self.cl.mem_flags.READ_ONLY | self.cl.mem_flags.COPY_HOST_PTR, hostbuf=target_bytes)
@@ -283,7 +283,6 @@ class GPUMiner:
         init_val = np.full(1, UINT32_MAX, dtype=np.uint32)
         self.cl.enqueue_copy(self.queue, buf_result, init_val)
 
-        # CRITICAL: set kernel args in correct order (index 0,1,4 cố định; 2,3 thay đổi mỗi vòng)
         self.kernel.set_arg(0, buf_last)
         self.kernel.set_arg(1, buf_target)
         self.kernel.set_arg(4, buf_result)
@@ -292,6 +291,7 @@ class GPUMiner:
         total_checked = 0
         start_nonce = 0
 
+        # --- QUÉT LIÊN TỤC KHÔNG NGHỈ ---
         while start_nonce <= max_nonce:
             current_items = min(chunk_items, max_nonce - start_nonce + 1)
             local = min(64, current_items)
@@ -308,7 +308,6 @@ class GPUMiner:
 
             total_checked += current_items
 
-            # Kiểm tra nonce tìm thấy
             res = np.zeros(1, dtype=np.uint32)
             self.cl.enqueue_copy(self.queue, res, buf_result).wait()
 
@@ -318,12 +317,8 @@ class GPUMiner:
                 print(f"{Fore.GREEN}✅ Found nonce {res[0]}, Real HR: {hr/1e3:.2f} kH/s")
                 return int(res[0]), hr, elapsed
 
-            # Cập nhật nonce TRƯỚC KHI nghỉ
             start_nonce += current_items
-
-            # Nghỉ 10s nếu còn việc và power < 100
-            if start_nonce <= max_nonce and power < 100:
-                time.sleep(10)
+            # KHÔNG SLEEP Ở ĐÂY NỮA
 
         elapsed = time.time() - start_time
         return None, 0.0, elapsed
@@ -384,10 +379,10 @@ def f_uptime(s):
 
 # ---------- main ----------
 def main():
-    print(f"{Fore.CYAN}{'='*60}\n{Fore.YELLOW}🪙 Duino-Coin GPU Miner – Merged Stable + 10s Sleep\n{Fore.CYAN}{'='*60}")
+    print(f"{Fore.CYAN}{'='*60}\n{Fore.YELLOW}🪙 Duino-Coin GPU Miner – Sleep 10s after FULL job\n{Fore.CYAN}{'='*60}")
     if not check_disallowed_hosting(): sys.exit(1)
     config = load_config(cl)
-    print(f"{Fore.GREEN}📋 {config['USERNAME']} | Key: {mask_key(config['MINING_KEY'])} | Power: {config['GPU_LOAD_PERCENT']}% (fixed 10s)")
+    print(f"{Fore.GREEN}📋 {config['USERNAME']} | Key: {mask_key(config['MINING_KEY'])} | Power: {config['GPU_LOAD_PERCENT']}%")
 
     miner = GPUMiner(config, cl)
     miner.init_gpu()
@@ -396,6 +391,8 @@ def main():
     start_t = time.time()
     last_report = start_t
     gid = secrets.randbelow(10000)
+
+    SLEEP_AFTER_JOB = 10  # <<< 10 giây nghỉ sau mỗi job
 
     try:
         while True:
@@ -406,7 +403,9 @@ def main():
                 while True:
                     lh, th, diff = client.send_job(config["USERNAME"], config["DIFFICULTY"], config["MINING_KEY"])
                     if not lh: time.sleep(1); continue
+                    
                     nonce, hr, t = miner.solve_job(lh, th, diff)
+                    
                     if nonce is not None:
                         fb = client.submit(nonce, hr, SOFTWARE_NAME, config["RIG_ID"], gid)
                         if fb is None:
@@ -420,6 +419,11 @@ def main():
                         elif fb.startswith("BAD"):
                             stats['rejected'] += 1
                             print(f"{Fore.RED}❌ REJECT #{stats['rejected']}")
+                    
+                    # --- NGHỈ 10s SAU KHI HOÀN THÀNH TOÀN BỘ JOB (DÙ THÀNH CÔNG HAY KHÔNG) ---
+                    print(f"{Fore.YELLOW}   [SLEEP] Job done, sleeping {SLEEP_AFTER_JOB}s...")
+                    time.sleep(SLEEP_AFTER_JOB)
+                    
                     if time.time()-last_report >= config["REPORT_INTERVAL"]:
                         uptime = int(time.time()-start_t)
                         total = stats['accepted']+stats['rejected']
