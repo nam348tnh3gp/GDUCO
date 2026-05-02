@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Duino-Coin GPU Miner – Full chunk, then sleep 10s
+Duino-Coin GPU Miner – Sleep 10s BEFORE submit
 """
 
 import sys, os, subprocess, platform, time, re, socket, secrets, json
@@ -291,7 +291,6 @@ class GPUMiner:
         total_checked = 0
         start_nonce = 0
 
-        # --- QUÉT LIÊN TỤC KHÔNG NGHỈ ---
         while start_nonce <= max_nonce:
             current_items = min(chunk_items, max_nonce - start_nonce + 1)
             local = min(64, current_items)
@@ -318,7 +317,6 @@ class GPUMiner:
                 return int(res[0]), hr, elapsed
 
             start_nonce += current_items
-            # KHÔNG SLEEP Ở ĐÂY NỮA
 
         elapsed = time.time() - start_time
         return None, 0.0, elapsed
@@ -379,7 +377,7 @@ def f_uptime(s):
 
 # ---------- main ----------
 def main():
-    print(f"{Fore.CYAN}{'='*60}\n{Fore.YELLOW}🪙 Duino-Coin GPU Miner – Sleep 10s after FULL job\n{Fore.CYAN}{'='*60}")
+    print(f"{Fore.CYAN}{'='*60}\n{Fore.YELLOW}🪙 Duino-Coin GPU Miner – Sleep BEFORE submit\n{Fore.CYAN}{'='*60}")
     if not check_disallowed_hosting(): sys.exit(1)
     config = load_config(cl)
     print(f"{Fore.GREEN}📋 {config['USERNAME']} | Key: {mask_key(config['MINING_KEY'])} | Power: {config['GPU_LOAD_PERCENT']}%")
@@ -392,7 +390,7 @@ def main():
     last_report = start_t
     gid = secrets.randbelow(10000)
 
-    SLEEP_AFTER_JOB = 10  # <<< 10 giây nghỉ sau mỗi job
+    SLEEP_AFTER_JOB = 10  # <<< 10 giây nghỉ trước khi submit
 
     try:
         while True:
@@ -405,6 +403,10 @@ def main():
                     if not lh: time.sleep(1); continue
                     
                     nonce, hr, t = miner.solve_job(lh, th, diff)
+                    
+                    # --- NGHỈ 10s TRƯỚC KHI GỬI KẾT QUẢ ---
+                    print(f"{Fore.YELLOW}   [SLEEP] GPU done, sleeping {SLEEP_AFTER_JOB}s before submit...")
+                    time.sleep(SLEEP_AFTER_JOB)
                     
                     if nonce is not None:
                         fb = client.submit(nonce, hr, SOFTWARE_NAME, config["RIG_ID"], gid)
@@ -419,10 +421,6 @@ def main():
                         elif fb.startswith("BAD"):
                             stats['rejected'] += 1
                             print(f"{Fore.RED}❌ REJECT #{stats['rejected']}")
-                    
-                    # --- NGHỈ 10s SAU KHI HOÀN THÀNH TOÀN BỘ JOB (DÙ THÀNH CÔNG HAY KHÔNG) ---
-                    print(f"{Fore.YELLOW}   [SLEEP] Job done, sleeping {SLEEP_AFTER_JOB}s...")
-                    time.sleep(SLEEP_AFTER_JOB)
                     
                     if time.time()-last_report >= config["REPORT_INTERVAL"]:
                         uptime = int(time.time()-start_t)
