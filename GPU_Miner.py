@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
-Duino-Coin GPU Miner – Fixed 10s Sleep per Chunk
+Duino-Coin GPU Miner – Fixed (Stable Loop)
 """
 
 import sys, os, subprocess, platform, time, re, socket, secrets, json
 from typing import Dict, List, Optional, Tuple, Any
 from urllib.parse import urlparse
 
-MINER_VER = "4.3-gpu2"
-SOFTWARE_NAME = f"Unofficial OpenCL PC/GPU Miner {MINER_VER}"
+MINER_VER = "1.0.0.2"
+SOFTWARE_NAME = f"Unofficial OpenCL GPU Miner {MINER_VER}"
 REQUEST_USER_AGENT = f"Duino-Coin-{SOFTWARE_NAME.replace(' ', '-')}"
 UINT32_MAX = 0xFFFFFFFF
 REQUIRED_GPU_DIFFICULTY = "EXTREME"
@@ -293,15 +293,31 @@ class GPUMiner:
 
         while start_nonce <= max_nonce:
             current_items = min(chunk_items, max_nonce - start_nonce + 1)
-            local = min(64, current_items)
-            global_size = ((current_items + local - 1) // local) * local
+            
+            # FIX: Đảm bảo local size luôn hợp lệ và chia hết
+            local = 64
+            while local > 1 and current_items % local != 0:
+                local //= 2
+            if current_items < local:
+                local = 1
+            
+            global_size = current_items
 
             self.kernel.set_arg(2, np.uint32(start_nonce))
             self.kernel.set_arg(3, np.uint32(current_items))
 
-            self.cl.enqueue_nd_range_kernel(self.queue, self.kernel, (global_size,), (local,)).wait()
+            try:
+                if local > 1:
+                    self.cl.enqueue_nd_range_kernel(self.queue, self.kernel, (global_size,), (local,)).wait()
+                else:
+                    self.cl.enqueue_nd_range_kernel(self.queue, self.kernel, (global_size,), None).wait()
+            except Exception as e:
+                print(f"{Fore.RED}❌ Kernel error: {e}")
+                return None, 0.0, time.time() - start_time
+
             total_checked += current_items
 
+            # Kiểm tra nonce tìm thấy
             res = np.zeros(1, dtype=np.uint32)
             self.cl.enqueue_copy(self.queue, res, buf_result).wait()
 
@@ -311,11 +327,12 @@ class GPUMiner:
                 print(f"{Fore.GREEN}✅ Found nonce {res[0]}, Real HR: {hr/1e3:.2f} kH/s")
                 return int(res[0]), hr, elapsed
 
-            # --- CỐ ĐỊNH NGHỈ 10 GIÂY ---
-            if power < 100:
-                time.sleep(10)
-
+            # FIX: Cập nhật nonce TRƯỚC KHI nghỉ
             start_nonce += current_items
+
+            # Chỉ nghỉ nếu còn việc phía trước
+            if start_nonce <= max_nonce and power < 100:
+                time.sleep(10)
 
         elapsed = time.time() - start_time
         return None, 0.0, elapsed
@@ -376,7 +393,7 @@ def f_uptime(s):
 
 # ---------- main ----------
 def main():
-    print(f"{Fore.CYAN}{'='*60}\n{Fore.YELLOW}🪙 Duino-Coin GPU Miner – Fixed 10s Sleep\n{Fore.CYAN}{'='*60}")
+    print(f"{Fore.CYAN}{'='*60}\n{Fore.YELLOW}🪙 Duino-Coin GPU Miner – Fixed (Stable)\n{Fore.CYAN}{'='*60}")
     if not check_disallowed_hosting(): sys.exit(1)
     config = load_config(cl)
     print(f"{Fore.GREEN}📋 {config['USERNAME']} | Key: {mask_key(config['MINING_KEY'])} | Power: {config['GPU_LOAD_PERCENT']}% (fixed 10s)")
